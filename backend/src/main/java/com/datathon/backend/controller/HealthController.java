@@ -53,7 +53,15 @@ public class HealthController {
     }
 
     private String checkScript() {
-        return Files.isRegularFile(Path.of(props.pythonScriptPath())) ? null : "Analysis script not found";
+        Path script = Path.of(props.pythonScriptPath());
+        if (!Files.isRegularFile(script)) {
+            return "Analysis script not found";
+        }
+        // engine.py loads model.joblib from the same folder as the scripts
+        if (!Files.isRegularFile(script.toAbsolutePath().resolveSibling("model.joblib"))) {
+            return "Analysis model not found";
+        }
+        return null;
     }
 
     private String checkService() {

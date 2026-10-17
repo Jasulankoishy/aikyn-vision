@@ -4,6 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Single place for all app.* settings (replaces the scattered @Value fields).
@@ -13,9 +14,9 @@ import java.util.List;
 public record AppProperties(
         String apiKey,
         @DefaultValue("real") String mode,
-        @DefaultValue("python3") String pythonCommand,
+        @DefaultValue("auto") String pythonCommand,           // "auto" = python on Windows, python3 elsewhere
         @DefaultValue("../scripts/analyze.py") String pythonScriptPath,
-        @DefaultValue("") String pythonServiceUrl,            // NEW
+        @DefaultValue("") String pythonServiceUrl,
         @DefaultValue("4") long timeoutMinutes,
         @DefaultValue("24") long jobTtlHours,
         @DefaultValue({"http://localhost:3000", "http://localhost:5173"}) List<String> allowedOrigins
@@ -24,14 +25,17 @@ public record AppProperties(
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("app.api-key must be set (use the APP_API_KEY environment variable)");
         }
+        // "auto" (or empty) is not a real executable: pick one for this OS
+        if (pythonCommand == null || pythonCommand.isBlank() || "auto".equalsIgnoreCase(pythonCommand.trim())) {
+            boolean windows = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+            pythonCommand = windows ? "python" : "python3";
+        }
     }
 
-    // NEW
     public boolean usesService() {
         return pythonServiceUrl != null && !pythonServiceUrl.isBlank();
     }
 
-    // NEW
     public String serviceBaseUrl() {
         return pythonServiceUrl.replaceAll("/+$", "");
     }
