@@ -15,7 +15,8 @@ public record AppProperties(
         @DefaultValue("real") String mode,
         @DefaultValue("python3") String pythonCommand,
         @DefaultValue("../scripts/analyze.py") String pythonScriptPath,
-        @DefaultValue("5") long timeoutMinutes,
+        @DefaultValue("") String pythonServiceUrl,            // NEW
+        @DefaultValue("4") long timeoutMinutes,
         @DefaultValue("24") long jobTtlHours,
         @DefaultValue({"http://localhost:3000", "http://localhost:5173"}) List<String> allowedOrigins
 ) {
@@ -23,5 +24,15 @@ public record AppProperties(
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("app.api-key must be set (use the APP_API_KEY environment variable)");
         }
+    }
+
+    // NEW
+    public boolean usesService() {
+        return pythonServiceUrl != null && !pythonServiceUrl.isBlank();
+    }
+
+    // NEW
+    public String serviceBaseUrl() {
+        return pythonServiceUrl.replaceAll("/+$", "");
     }
 }
