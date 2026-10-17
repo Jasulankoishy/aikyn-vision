@@ -1,0 +1,27 @@
+# Private video/data/evidence and model weights
+*.mov
+*.MOV
+*.mp4
+*.avi
+*.mkv
+*.pt
+*.pth
+*.onnx
+*.safetensors
+.env
+.env.*
+!.env.example
+data/
+datasets/
+evidence/
+uploads/
+weights/
+models/
+node_modules/
+__pycache__/
+.pytest_cache/
+.playwright-cli/
+output/playwright/
+*.log
+.DS_Store
+Thumbs.db

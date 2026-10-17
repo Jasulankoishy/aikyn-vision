@@ -1,0 +1,10 @@
+{
+  "name": "forte-vision-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Forte Vision Datathon interface with the shared team API",
+  "scripts": {
+    "check": "node --check app.js",
+    "preview": "python -m http.server 4173 --bind 127.0.0.1"
+  }
+}
