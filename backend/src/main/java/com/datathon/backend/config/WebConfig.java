@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
+import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
@@ -30,6 +31,13 @@ public class WebConfig implements WebMvcConfigurer {
                 // No allowCredentials: auth is a header, not a cookie.
                 // No exposedHeaders: the API key must never be echoed back.
                 .maxAge(3600);
+    }
+
+    @Override
+    public void addViewControllers(ViewControllerRegistry registry) {
+        // Custom resource handlers do not get Spring's automatic welcome page,
+        // so without this, opening just "/" gives the Whitelabel 404 page.
+        registry.addViewController("/").setViewName("forward:/index.html");
     }
 
     @Override

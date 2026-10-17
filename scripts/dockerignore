@@ -1,0 +1,7 @@
+videos/
+*.mov
+labels.csv
+.venv/
+__pycache__/
+*.pyc
+.git/

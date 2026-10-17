@@ -1,0 +1,50 @@
+# Put this file in the project root, next to scripts/, backend/ and frontend/.
+#   docker compose up -d --build                      -> analyzer + backend on http://localhost:8080
+#   docker compose --profile tunnel up -d --build     -> same + a public https://...trycloudflare.com address
+services:
+  analyzer:
+    build: ./scripts
+    restart: unless-stopped
+    environment:
+      TMPDIR: /shared-tmp            # service.py only accepts videos inside the temp dir
+      ANALYZE_BUDGET_SEC: "230"
+      ANALYZE_CONCURRENCY: "1"       # keep equal to the Java executor pool size (AsyncConfig)
+    volumes:
+      - shared-tmp:/shared-tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if b'true' in urllib.request.urlopen('http://127.0.0.1:8001/health').read() else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    # no "ports:" on purpose - only the backend may call this service
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      analyzer:
+        condition: service_healthy
+    environment:
+      APP_API_KEY: ${APP_API_KEY:?Create a .env file next to this file with APP_API_KEY=your-secret}
+      APP_PYTHON_SERVICE_URL: http://analyzer:8001
+      SPRING_DATASOURCE_URL: jdbc:sqlite:/data/jobs.db
+      JAVA_OPTS: -Djava.io.tmpdir=/shared-tmp   # uploads land in the folder shared with the analyzer
+    volumes:
+      - shared-tmp:/shared-tmp
+      - backend-data:/data
+      - ./frontend:/app/frontend:ro            # served by WebConfig from file:frontend/
+    ports:
+      - "8080:8080"
+
+  tunnel:                                       # optional public URL, started only with --profile tunnel
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://backend:8080
+    depends_on:
+      - backend
+
+volumes:
+  shared-tmp:
+  backend-data:

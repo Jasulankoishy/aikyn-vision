@@ -1,0 +1,3 @@
+target/
+jobs.db
+.git/
