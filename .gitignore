@@ -16,7 +16,6 @@ datasets/
 evidence/
 uploads/
 weights/
-models/
 node_modules/
 __pycache__/
 .pytest_cache/

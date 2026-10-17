@@ -416,11 +416,11 @@ const POLL_MS = 1600;
 const state = {
   phase: 'idle', file: null, videoUrl: null, duration: null,
   jobId: null, jobBase: null, result: null, error: '', mode: null,
-  selected: 0, generation: 0, controller: null, timer: null, deadline: 0,
+  selected: 0, generation: 0, controller: null, timer: null, deadline: 0, localDemo: false,
   ready: false, readyController: null, readyGeneration: 0,
 };
 const active = () => ['uploading', 'processing'].includes(state.phase);
-const hasJob = () => Boolean(state.jobId && state.mode !== 'demo');
+const hasJob = () => Boolean(state.jobId && !state.localDemo);
 const announce = (text) => { $('#liveStatus').textContent = text; };
 const seconds = (n) => {
   if (!Number.isFinite(n) || n < 0) return 'Время не указано';
@@ -539,7 +539,7 @@ function releaseVideo() {
 }
 function clearJob() {
   stopWork(); state.jobId = null; state.jobBase = null; state.result = null;
-  state.error = ''; state.mode = null; state.selected = 0; state.phase = 'idle';
+  state.error = ''; state.mode = null; state.selected = 0; state.phase = 'idle'; state.localDemo = false;
   $('#eventCount').hidden = true; $('#resultsDescription').textContent = 'События и доказательные кадры текущего задания.';
   renderResults(); renderRules();
 }
@@ -742,7 +742,7 @@ function runDemo(verdict='violation') {
   clearJob();startDemo(verdict);
 }
 function startDemo(verdict) {
-  const generation=state.generation;state.phase='processing';state.mode='demo';state.jobId='demo-interface-only';
+  const generation=state.generation;state.phase='processing';state.mode='demo';state.localDemo=true;state.jobId='demo-interface-only';
   renderResults();renderUpload();navigate('results');announce('Демонстрация интерфейса. Используются синтетические данные.');
   state.timer=setTimeout(()=>{
     if(generation!==state.generation)return;
