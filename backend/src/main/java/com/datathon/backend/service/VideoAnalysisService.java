@@ -5,6 +5,7 @@ import com.datathon.backend.dto.JobStatusResponse;
 import com.datathon.backend.entity.JobEntity;
 import com.datathon.backend.repository.JobRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -70,7 +71,7 @@ public class VideoAnalysisService {
                     ? callService(jobId, tempVideoFile)
                     : runProcess(jobId, tempVideoFile);
 
-            JobStatusResponse response = objectMapper.readValue(outputJson, JobStatusResponse.class);
+            JobStatusResponse response = parseCompletedResult(outputJson);
             response.setJobId(jobId);
             response.setStatus("done");
             response.setMode(props.mode());
@@ -115,13 +116,70 @@ public class VideoAnalysisService {
         }
 
         if (response.statusCode() == 504) {
-            throw new AnalysisFailure("TIMEOUT", "Analysis timed out");
+            throw new AnalysisFailure("TIMEOUT", "Анализ не завершён за отведённое время. Вердикта нет.");
         }
         if (response.statusCode() != 200 || response.body() == null || response.body().isBlank()) {
-            log.error("Job {}: analysis service returned HTTP {}: {}", jobId, response.statusCode(), response.body());
+            // Only known worker error codes get a public message. Never relay arbitrary model text.
+            if (response.body() != null && response.body().length() <= 16_384) {
+                String code = "";
+                try {
+                    code = objectMapper.readTree(response.body()).path("error").path("code").asText("");
+                } catch (Exception ignored) {
+                    // Malformed errors fall back to the generic processing failure below.
+                }
+                if ("incomplete_analysis".equals(code)) {
+                    throw new AnalysisFailure("INCOMPLETE_ANALYSIS",
+                            "Модель не смогла проверить всю запись. Вердикта нет; попробуйте более короткий фрагмент.");
+                }
+                if ("analysis_timeout".equals(code)) {
+                    throw new AnalysisFailure("TIMEOUT", "Анализ не завершён за отведённое время. Вердикта нет.");
+                }
+                if ("worker_unavailable".equals(code)) {
+                    throw new AnalysisFailure("ANALYSIS_UNAVAILABLE", "Локальная модель недоступна. Проверьте её готовность.");
+                }
+            }
+            log.error("Job {}: analysis service returned HTTP {}", jobId, response.statusCode());
             throw new AnalysisFailure("ANALYSIS_FAILED", "Video analysis failed");
         }
         return response.body();
+    }
+
+    /** A failed, partial, or malformed result must never become a successful empty finding. */
+    private JobStatusResponse parseCompletedResult(String outputJson) throws Exception {
+        JsonNode result = objectMapper.readTree(outputJson);
+        if (result == null || !result.isObject() || result.hasNonNull("error")
+                || (result.has("status") && !"done".equals(result.path("status").asText()))) {
+            throw new AnalysisFailure("INVALID_RESULT", "Сервис не вернул завершённый результат. Повторите анализ.");
+        }
+        String verdict = result.path("verdict").asText();
+        JsonNode events = result.path("violations");
+        if (!("violation".equals(verdict) || "no_violation".equals(verdict)) || !events.isArray()
+                || ("violation".equals(verdict) != !events.isEmpty())) {
+            throw new AnalysisFailure("INVALID_RESULT", "Сервис вернул некорректный результат. Повторите анализ.");
+        }
+        JsonNode analysis = result.path("analysis");
+        if ((analysis.has("complete") && !analysis.path("complete").asBoolean())
+                || (analysis.has("timeline_covered") && !analysis.path("timeline_covered").asBoolean())) {
+            throw new AnalysisFailure("INCOMPLETE_ANALYSIS", "Анализ записи не завершён. Попробуйте более короткий фрагмент.");
+        }
+        if (analysis.path("experimental").asBoolean()) {
+            JsonNode done = analysis.path("windows_done");
+            JsonNode total = analysis.path("windows_total");
+            if (!analysis.path("complete").isBoolean() || !analysis.path("complete").asBoolean()
+                    || !analysis.path("timeline_covered").isBoolean() || !analysis.path("timeline_covered").asBoolean()
+                    || !done.isIntegralNumber() || !total.isIntegralNumber()
+                    || !done.canConvertToInt() || !total.canConvertToInt()
+                    || total.asInt() <= 0 || done.asInt() != total.asInt()) {
+                throw new AnalysisFailure("INCOMPLETE_ANALYSIS", "Анализ записи не завершён. Попробуйте более короткий фрагмент.");
+            }
+        }
+        for (JsonNode event : events) {
+            JsonNode timecode = event.path("timecode_sec");
+            if (!timecode.isNumber() || !Double.isFinite(timecode.asDouble()) || timecode.asDouble() < 0) {
+                throw new AnalysisFailure("INVALID_RESULT", "Сервис не вернул таймкод события. Повторите анализ.");
+            }
+        }
+        return objectMapper.treeToValue(result, JobStatusResponse.class);
     }
 
     /** Mode 2 (fallback): start a Python process per video. Slower: models are reloaded every time. */

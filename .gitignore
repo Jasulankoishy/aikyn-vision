@@ -25,3 +25,21 @@ output/playwright/
 .DS_Store
 Thumbs.db
 /.env
+
+# Local execution, private outputs and model downloads
+.venv/
+.runtime/
+.work/
+outputs/
+test-results/
+*.pyc
+*.db
+*.sqlite*
+*.zip
+*.docx
+*.xlsx
+training/.venv/
+training/qwen/base/
+training/qwen/base-4b/
+training/qwen/data/
+training/qwen/runtime_selection.json

@@ -1,0 +1,15 @@
+base/
+base-*/
+data/
+outputs/
+*.lock
+*.log
+*.part.*
+runtime_selection.json
+__pycache__/
+.pytest_cache/
+*.pyc
+*.safetensors
+*.pt
+*.pth
+*.bin
