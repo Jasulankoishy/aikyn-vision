@@ -42,4 +42,3 @@ training/.venv/
 training/qwen/base/
 training/qwen/base-4b/
 training/qwen/data/
-training/qwen/runtime_selection.json

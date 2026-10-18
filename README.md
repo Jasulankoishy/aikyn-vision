@@ -9,10 +9,14 @@ JSON events with source timecodes → browser**. The frontend remains on port
 `scripts/service.py` uses it unless `ANALYZER_BACKEND=qwen` is explicitly set.
 The launcher below selects the local Qwen path.
 
-**Recognition is still experimental.** The native 2B baseline has known false
-positives and missed events; model quality has not passed validation. The newer
-4B/observation experiments are not enabled or included in this release. A ready
-server or passing contract test does not mean that video findings are accurate.
+**Recognition is still experimental.** This release selects the local native
+Qwen3-VL-4B pipeline, revision `native-sequence-refine-v14-room-door-detail`,
+with a 3,145,728-pixel input cap. It retains local temporal review and adds the
+room-door observation path. Other experimental engines are not registered.
+Recent recognition checks covered two development recordings; they do not
+establish dataset accuracy or timestamp accuracy. False positives and missed
+events remain possible. A ready server or passing contract test does not mean
+that video findings are accurate. No finetuning or accuracy percentage is claimed.
 
 ### First setup on Windows
 
@@ -25,7 +29,7 @@ py -3.12 -m venv .venv
 Set-Location backend
 .\mvnw.cmd -Dmaven.compiler.proc=full package -DskipTests
 Set-Location ..
-.\training\qwen\bootstrap.ps1 -DownloadModel
+.\training\qwen\bootstrap.ps1 -DownloadModel -Model 4b
 .\START_AIQYN_VISION.ps1 -Action preflight
 .\START_AIQYN_VISION.ps1
 .\START_AIQYN_VISION.ps1 -Action status
@@ -66,8 +70,19 @@ node --test tests/api-contract.test.cjs
 Set-Location ..
 ```
 
-The publication was checked with 61 Python bridge tests, 41 model-orchestration
-tests, 14 targeted Java contract tests and 25 frontend API tests. They use synthetic inputs and do not
-measure recognition accuracy. Real model weights and private recordings remain
+The publication includes Python bridge and model-orchestration tests, targeted
+Java contract tests and frontend API tests. They use synthetic inputs and do not
+measure recognition accuracy. The two-recording development check is not an
+independent accuracy evaluation. Real model weights and private recordings remain
 local. The prepared package has not been installed from scratch on a second
 computer.
+
+### Regulatory explanations
+
+Each existing candidate receives curated legal context after evidence validation.
+The [14-category catalogue](docs/regulatory-catalog.md) includes documents,
+paragraphs, official links and conditions; the [JSON catalogue](rules/regulatory_reference_catalog.json)
+is available for the team. Source text was checked on 2026-10-18. The catalogue
+does not create detections or claim that all 14 categories are recognized.
+Internal-policy and unknown-content cases remain explicitly unestablished.
+The existing frontend displays the explanation and applicable conditional reference.
