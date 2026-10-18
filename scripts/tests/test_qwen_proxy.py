@@ -11,33 +11,6 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from qwen_engine import QwenEngine, QwenWorkerError
-import qwen_engine
-
-
-def test_qwen_paths_are_repository_relative():
-    assert qwen_engine.WORKSPACE == Path(__file__).resolve().parents[2]
-
-
-def test_default_service_keeps_legacy_engine(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-    monkeypatch.delenv("ANALYZER_BACKEND", raising=False)
-    module = importlib.reload(importlib.import_module("service"))
-    monkeypatch.setattr(module, "TMP_DIR", tmp_path)
-    closed = []
-    class Legacy:
-        def analyze(self, path, budget):
-            return {"verdict": "no_violation", "violations": []}
-        def close(self):
-            closed.append(True)
-    monkeypatch.setitem(sys.modules, "engine", SimpleNamespace(Engine=Legacy))
-    monkeypatch.setattr(module, "QwenEngine", lambda: pytest.fail("Default must not load Qwen"))
-    video = tmp_path / "legacy.mov"
-    video.write_bytes(b"synthetic")
-    with TestClient(module.app) as client:
-        assert module.BACKEND == "legacy"
-        assert client.get("/health").json() == {"status": "ok", "model_loaded": True}
-        assert client.post("/analyze", json={"path": str(video)}).json() == {"verdict": "no_violation", "violations": []}
-    assert closed == [True]
 
 
 STUB = '''import json, sys, time
@@ -60,6 +33,10 @@ for line in sys.stdin:
                          "complete":True,"timeline_covered":True,"windows_done":1,"windows_total":1}}}
         if "partial" in name:
             out["result"]["analysis"]["windows_done"]=0
+        if "unfinished-candidates" in name:
+            out["result"]["analysis"]["candidate_review"]={"status":"running","done":0,"total":1,"remaining":1}
+        if "confirmed-claim" in name:
+            out["result"]["analysis"]["compliance_established"]=True
     print(json.dumps(out),flush=True)
 '''
 
@@ -107,6 +84,15 @@ def test_partial_success_cannot_be_reported_as_no_violation(engine, tmp_path):
     with pytest.raises(QwenWorkerError) as caught:
         engine.analyze(tmp_path / "partial.mov", 2)
     assert caught.value.code == "incomplete_analysis"
+
+
+@pytest.mark.parametrize("name", ["unfinished-candidates.mov", "confirmed-claim.mov"])
+def test_result_contract_failure_is_not_published_and_worker_remains_usable(engine, tmp_path, name):
+    with pytest.raises(QwenWorkerError) as caught:
+        engine.analyze(tmp_path / name, 2)
+    assert caught.value.code == "incomplete_analysis"
+    assert engine.ready
+    assert engine.analyze(tmp_path / "fine.mov", 2)["analysis"]["result_status"] == "no_signals_found"
 
 
 def test_timeout_kills_and_restarts_only_its_worker(engine, tmp_path):
@@ -254,3 +240,32 @@ def test_service_gate_timeout_does_not_wait_unbounded(service, tmp_path, monkeyp
             assert time.monotonic() - before < 1
         finally:
             module._gate.release()
+
+
+import qwen_engine
+
+
+def test_qwen_paths_are_repository_relative():
+    assert qwen_engine.WORKSPACE == Path(__file__).resolve().parents[2]
+
+
+def test_default_service_keeps_legacy_engine(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.delenv("ANALYZER_BACKEND", raising=False)
+    module = importlib.reload(importlib.import_module("service"))
+    monkeypatch.setattr(module, "TMP_DIR", tmp_path)
+    closed = []
+    class Legacy:
+        def analyze(self, path, budget):
+            return {"verdict": "no_violation", "violations": []}
+        def close(self):
+            closed.append(True)
+    monkeypatch.setitem(sys.modules, "engine", SimpleNamespace(Engine=Legacy))
+    monkeypatch.setattr(module, "QwenEngine", lambda: pytest.fail("Default must not load Qwen"))
+    video = tmp_path / "legacy.mov"
+    video.write_bytes(b"synthetic")
+    with TestClient(module.app) as client:
+        assert module.BACKEND == "legacy"
+        assert client.get("/health").json() == {"status": "ok", "model_loaded": True}
+        assert client.post("/analyze", json={"path": str(video)}).json() == {"verdict": "no_violation", "violations": []}
+    assert closed == [True]

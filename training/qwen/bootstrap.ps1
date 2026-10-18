@@ -1,4 +1,4 @@
-param([switch]$DownloadModel)
+param([switch]$DownloadModel, [ValidateSet('2b','4b')][string]$Model = '4b')
 $ErrorActionPreference = 'Stop'
 $taskTraining = Split-Path -Parent $PSScriptRoot
 $taskEnvironment = Join-Path $taskTraining '.venv'
@@ -14,7 +14,8 @@ if ($LASTEXITCODE -ne 0) { throw 'CUDA PyTorch installation failed.' }
 & $taskPython -m pip install -r (Join-Path $PSScriptRoot 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Qwen dependency installation failed.' }
 if ($DownloadModel) {
-    & $taskPython (Join-Path $PSScriptRoot 'download_model.py')
+    $taskDownloader = if ($Model -eq '4b') { 'download_model_4b.py' } else { 'download_model.py' }
+    & $taskPython (Join-Path $PSScriptRoot $taskDownloader)
     if ($LASTEXITCODE -ne 0) { throw 'Official model download failed.' }
 }
 Write-Output 'Local inference environment is ready. Model inference requires an NVIDIA CUDA GPU.'

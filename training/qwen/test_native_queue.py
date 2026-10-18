@@ -29,6 +29,7 @@ def mock_engine(monkeypatch, tmp_path):
     engine.sample_video = lambda *args: frames
     engine.infer_checks = lambda *args, **kwargs: (
         dict.fromkeys(native.FIELDS, 'not_seen'), {'mock': True})
+    engine.infer_door_sequence = lambda *args, **kwargs: ({'sequence':'A'}, {'mock':True})
     candidates = [dict(kind='cash_mixed', start_sec=0.0, end_sec=20.0,
                        supporting_windows=[i]) for i in range(9)]
     monkeypatch.setattr(native, 'risk_candidates', lambda outcomes: candidates)
@@ -55,14 +56,16 @@ def test_ninth_candidate_is_reviewed_and_its_finding_is_preserved(mock_engine):
     result = engine.analyze(path, budget_sec=60)
 
     assert len(locates) == 9
-    assert len(result['analysis']['refinements']) == 9
+    assert len(result['analysis']['refinements']) == 10
     assert result['analysis']['candidate_review'] == {
-        'status': 'complete', 'total': 9, 'done': 9, 'remaining': 0}
+        'status': 'complete', 'total': 10, 'done': 10, 'remaining': 0}
     assert result['analysis']['complete'] is True
     assert result['verdict'] == 'violation'
     assert len(result['violations']) == 1
-    assert result['analysis']['refinements'][-1]['supporting_windows'] == [8]
-    assert result['analysis']['refinements'][-1]['status'] == 'observed'
+    cash_refinements=[r for r in result['analysis']['refinements'] if r['kind']=='cash_mixed']
+    assert len(cash_refinements)==9
+    assert cash_refinements[-1]['supporting_windows'] == [8]
+    assert cash_refinements[-1]['status'] == 'observed'
 
 
 @pytest.mark.parametrize('timeout_mode', ['inside_inference', 'after_inference'])
@@ -79,13 +82,13 @@ def test_timeout_keeps_queue_counts_and_never_returns_clean(mock_engine, timeout
         return {'time_sec': None}, {'response': {'time_sec': None}}
 
     engine.infer = infer
-    with pytest.raises(TimeoutError, match='completed 2/9 candidates; 7 remaining'):
+    with pytest.raises(TimeoutError, match='completed 2/10 candidates; 8 remaining'):
         engine.analyze(path, budget_sec=60)
 
     progress = next(row for row in engine._last_diagnostics
                     if row['stage'] == 'candidate_queue')
     assert progress['status'] == 'incomplete'
-    assert progress['done'] == 2 and progress['remaining'] == 7
+    assert progress['done'] == 2 and progress['remaining'] == 8
     assert progress['reason'] == 'deadline_exceeded'
     assert progress['current_candidate']['kind'] == 'cash_mixed'
     serialized = json.dumps(engine._last_diagnostics)
@@ -101,7 +104,7 @@ def test_expired_budget_before_first_candidate_is_explicit(mock_engine):
 
     engine.infer_checks = checks
     engine.infer = lambda *args, **kwargs: pytest.fail('Expired queue called model')
-    with pytest.raises(TimeoutError, match='completed 0/9 candidates; 9 remaining'):
+    with pytest.raises(TimeoutError, match='completed 0/10 candidates; 10 remaining'):
         engine.analyze(path, budget_sec=60)
     progress = engine._last_diagnostics[-1]
     assert progress['stage'] == 'candidate_queue' and progress['status'] == 'incomplete'
@@ -114,6 +117,6 @@ def test_invalid_candidate_answer_keeps_queue_incomplete(mock_engine):
         engine.analyze(path, budget_sec=60)
     progress = next(row for row in engine._last_diagnostics
                     if row['stage'] == 'candidate_queue')
-    assert progress['done'] == 0 and progress['remaining'] == 9
+    assert progress['done'] == 0 and progress['remaining'] == 10
     assert progress['status'] == 'incomplete'
     assert progress['reason'] == 'candidate_processing_error'
