@@ -5,8 +5,15 @@ import math
 VERSION = "evidence-contract-v1"
 NATIVE_KINDS = {
     "c01": "old_cash_at_client_change", "c02": "cash_mixed",
-    "c06": "cash_unattended", "c08": "safe_open_when_left",
+    "c03": "cash_receipt_without_visible_count",
+    "c04": "cash_receipt_without_visible_identity_check",
+    "c05": "cash_counted_after_client_departure",
+    "c06": "cash_unattended", "c07": "package_left_unattended",
+    "c08": "safe_open_when_left",
+    "c09": "safe_key_left_in_lock",
+    "c10": "documents_or_seals_left_unattended",
     "c11": "screen_unlocked_when_left", "c12": "room_door_left_open",
+    "c13": "personal_items_in_cash_area", "c14": "rejected_banknotes_recombined",
 }
 
 

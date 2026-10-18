@@ -21,7 +21,7 @@ from temporal_core import windows
 from review_findings import build_findings, PUBLIC_CASH_RULE
 from door_observation import infer_door_observation
 
-VERSION='native-sequence-refine-v14-room-door-detail'
+VERSION='native-sequence-refine-v15-fourteen-categories'
 RISK_TITLES={
     'cash_mixed':('c02','Возможное объединение пачек наличных'),
     'old_cash_at_client_change':('c01','Возможное оставление наличных при смене клиента'),
@@ -29,6 +29,32 @@ RISK_TITLES={
     'safe_open_when_left':('c08','Возможно открытый сейф при уходе кассира'),
     'screen_unlocked_when_left':('c11','Возможно незаблокированный экран при уходе кассира'),
     'room_door_left_open':('c12','Возможно открытая дверь кассового помещения'),
+    'cash_receipt_without_visible_count':('c03','Возможный приём наличных без видимого пересчёта'),
+    'cash_receipt_without_visible_identity_check':('c04','Возможный приём без видимой идентификации клиента'),
+    'cash_counted_after_client_departure':('c05','Возможный пересчёт принимаемых денег после ухода клиента'),
+    'package_left_unattended':('c07','Возможно оставленный без присмотра пакет'),
+    'safe_key_left_in_lock':('c09','Возможно оставленный в замке сейфа ключ'),
+    'documents_or_seals_left_unattended':('c10','Возможно оставленные документы или печати при уходе кассира'),
+    'personal_items_in_cash_area':('c13','Возможные личные вещи в рабочей кассовой зоне'),
+    'rejected_banknotes_recombined':('c14','Возможное объединение отделённых аппаратом купюр без видимой проверки'),
+}
+
+# A tiny crop cannot establish a missing earlier step or the order of a whole
+# operation. These categories receive the full proposed operation window.
+OPERATION_CONTEXT_KEYS = frozenset({
+    'cash_receipt_without_visible_count', 'cash_receipt_without_visible_identity_check',
+    'cash_counted_after_client_departure', 'rejected_banknotes_recombined',
+})
+DETAIL_OBJECT_KEYS = frozenset({'safe_key_left_in_lock', 'personal_items_in_cash_area'})
+CATEGORY_NOTES = {
+    'cash_receipt_without_visible_count': 'Ненаблюдаемый пересчёт не равнозначен его отсутствию; скрытые этапы операции остаются неизвестными.',
+    'cash_receipt_without_visible_identity_check': 'Физическое удостоверение может быть заменено цифровой проверкой; отсутствие документа в кадре не доказывает нарушение.',
+    'cash_counted_after_client_departure': 'Нужно отличать первичный приём от повторного внутреннего пересчёта и установить фактический уход клиента.',
+    'package_left_unattended': 'Содержимое непрозрачного пакета неизвестно; пакет автоматически не считается наличными.',
+    'safe_key_left_in_lock': 'Нужны различимый ключ, замок сейфа и контекст доступа; ручка или выступ не считаются ключом.',
+    'documents_or_seals_left_unattended': 'Содержание бумаг и статус печатей неизвестны; их наличие на столе само по себе не устанавливает юридическое нарушение.',
+    'personal_items_in_cash_area': 'Личное назначение предмета и границы кассового узла требуют установления; рабочее оборудование не считается личной вещью.',
+    'rejected_banknotes_recombined': 'Отделение аппаратом не доказывает подделку; причина отделения и выполненные проверки могут быть неизвестны.',
 }
 
 
@@ -206,7 +232,7 @@ class NativeQuickEngine(QuickEngine):
                                                   'message':'Модель не смогла различить положение двери помещения в последовательности кадров.',
                                                   'status':'requires_review','reason':'door_sequence_unclear'})
                             continue
-                    full_state_window=kind == 'room_door_left_open' and b-a <= 20.
+                    full_state_window=(kind == 'room_door_left_open' and b-a <= 20.) or kind in OPERATION_CONTEXT_KEYS
                     if full_state_window:
                         # The dense pass uses the whole candidate anyway, so a
                         # separate point search is redundant. This midpoint is
@@ -234,6 +260,11 @@ class NativeQuickEngine(QuickEngine):
                         center=point['time_sec']
                     lower=max(0.,center-3.); upper=min(duration,center+4.)
                     fine_limit=32
+                    if kind in OPERATION_CONTEXT_KEYS:
+                        lower,upper=a,b
+                        fine_limit=96
+                    elif kind in DETAIL_OBJECT_KEYS:
+                        fine_limit=8
                     if kind == 'room_door_left_open':
                         # A persistent state needs the passage and later closure
                         # context. A short crop around a late proposal can cut
@@ -259,6 +290,17 @@ class NativeQuickEngine(QuickEngine):
                               +json.dumps(time_map,separators=(',',':'))+'. '
                               'Use start_sec from the first supporting pair and end_sec from the last. '
                               'Do not return guessed identities or money ownership.')
+                    if kind in OPERATION_CONTEXT_KEYS:
+                        question += (
+                            ' This category depends on the visible sequence of a complete operation. '
+                            'Trace its beginning, relevant handling and completion within this input. '
+                            'An unobserved document check/count is NOT evidence that it was omitted. '
+                            'If the operation begins before this input, ends after it, contains occlusion, '
+                            'or sparse frames could hide the required check, return unclear. '
+                            'Digital identity checks may not be visually observable. '
+                            'Do not infer lack of verification from typing, a missing physical card or a machine reject tray. '
+                            'For a supported candidate, localize the visible transition or action, not an invented missing action.'
+                        )
                     history = (earlier_frame_pairs(frames,fine)
                                if self.temporal_context and kind=='old_cash_at_client_change' else [])
                     if history:
@@ -282,19 +324,23 @@ class NativeQuickEngine(QuickEngine):
                     # supports reached from overlapping candidate windows.
                     if any(e['category_id']==cid and e['start_sec']==times[0] and e['end_sec']==times[-1] for e in events):
                         continue
-                    rule=PUBLIC_CASH_RULE.copy() if kind in RISK_KEYS[:3] else None
+                    rule=PUBLIC_CASH_RULE.copy() if kind in {'cash_mixed','old_cash_at_client_change','cash_unattended'} else None
                     description=((('Локальная модель отметила состояние двери при подробном просмотре четырёх исходных кадров и повторном определении интервала. '
                                    if kind=='room_door_left_open' else
-                                   'Локальная модель отметила признак при обзорном просмотре и повторном анализе с 4 кадрами/с. '))+
+                                   'Локальная модель отметила признак при обзорном просмотре и повторном анализе последовательности исходных кадров. '))+
                                  f'Интервал по выбранным кадрам: {times[0]:.2f}–{times[-1]:.2f} с. '
                                  'Это автоматическая локализация, её границы и правильность требуют проверки человеком. ')
                     description+= ('Принадлежность денег разным клиентам не установлена; пункт 20 применим только при подтверждении соответствующих обстоятельств операции.'
-                                  if rule else 'Применимое внутреннее правило банка не подтверждено; нормативное основание требует проверки.')
+                                  if rule else 'Применимость нормативного основания требует проверки.')
+                    if kind in CATEGORY_NOTES:
+                        description += ' ' + CATEGORY_NOTES[kind]
                     if kind == 'room_door_left_open':
                         description += 'Найден подозрительный эпизод: возможно, дверь помещения оставалась открытой. Вход человека и его права доступа этим событием не устанавливаются.'
                     events.append({'type':title,'category_id':cid,'timecode_sec':times[0],
                                    'start_sec':times[0],'end_sec':times[-1],'description':description,
-                                   'localization':'detailed_state_sample_support' if kind=='room_door_left_open' else 'dense_sample_support',
+                                   'localization':('detailed_state_sample_support' if kind=='room_door_left_open' else
+                                                   'operation_window_sample_support' if kind in OPERATION_CONTEXT_KEYS else
+                                                   'object_detail_sample_support' if kind in DETAIL_OBJECT_KEYS else 'dense_sample_support'),
                                    'status':'possible_sign_requires_review',
                                    'rule':rule,'evidence_frames':evidence(frames,times)})
                     print(json.dumps({'stage':'refine','candidates_reviewed':index+1,'candidates_total':len(candidates),
@@ -317,11 +363,13 @@ class NativeQuickEngine(QuickEngine):
                                 'uncertain_windows':sum(w['uncertain'] for w in outcomes),'windows':outcomes,
                                 'overview':overview,'actions':actions,'sequence':sequence,'refinements':refinements,
                                 'supported_categories':[value[0] for value in RISK_TITLES.values()],
+                                'category_coverage':{'configured':len(RISK_TITLES),'screened':list(RISK_TITLES),
+                                                     'accuracy_validated':False},
                                 'candidate_review':{k:v for k,v in queue_progress.items() if k!='stage'},
                                 'review_questions':questions[:40],
                                 'limitations':preliminary['limitations']+[
                                     'Видеомодель использует обзор всей операции, перекрывающиеся фрагменты и историю непроверенных наблюдений.',
-                                    'Кандидаты проходят повторный просмотр исходных кадров; для двери используются четыре детальных кадра всего фрагмента, для других событий — выборка с 4 кадрами/с. Это не независимая проверка человеком.',
+                                    'Кандидаты проходят повторный просмотр исходных кадров: полный фрагмент для последовательности операции, детальные кадры для мелких предметов и двери. Число кадров ограничено бюджетом; короткое действие может быть пропущено. Это не независимая проверка человеком.',
                                     'Начало и конец привязаны к исходным кадрам, но точность границ не гарантирована; два кадра объединяются видеопроцессором.',
                                     'Отсутствие действия в выборке не доказывает его отсутствие в операции. Записи в банковской базе по видео не проверяются.'],
                                 'peak_vram_gib':round(self.torch.cuda.max_memory_allocated()/2**30,3)},

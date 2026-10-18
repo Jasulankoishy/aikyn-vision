@@ -6,16 +6,26 @@ This gate checks the model's own consistency; it is not independent vision.
 from copy import deepcopy
 import math
 
-VERSION = 'compound-support-v2-room-door'
+VERSION = 'compound-support-v3-fourteen-categories'
 REQUIREMENTS = {
     'c01': ('old_cash_at_client_change', 'cash_left_on_counter', 'next_client_started'),
     # Catalog c02 concerns TWO CLIENTS, not merely two parts of one bundle.
     'c02': ('cash_mixed', 'next_client_started'),
+    # Absence of a sampled action is not evidence of skipping that action.
+    # Only a positive compound observation may support c03/c04.
+    'c03': ('cash_receipt_without_visible_count',),
+    'c04': ('cash_receipt_without_visible_identity_check',),
+    'c05': ('cash_counted_after_client_departure', 'cash_counted', 'client_departed'),
     'c06': ('cash_unattended', 'cash_left_on_counter', 'cashier_left'),
+    'c07': ('package_left_unattended', 'cashier_left'),
     'c08': ('safe_open_when_left', 'cashier_left'),
+    'c09': ('safe_key_left_in_lock',),
+    'c10': ('documents_or_seals_left_unattended', 'cashier_left'),
     'c11': ('screen_unlocked_when_left', 'cashier_left'),
     # An open room door does not require anyone to cross the threshold.
     'c12': ('room_door_left_open',),
+    'c13': ('personal_items_in_cash_area',),
+    'c14': ('rejected_banknotes_recombined',),
 }
 
 

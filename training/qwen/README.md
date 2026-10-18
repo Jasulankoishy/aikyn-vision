@@ -2,8 +2,13 @@
 
 The checked-in `runtime_selection.json` selects **native Qwen3-VL-4B-Instruct**
 with `pixel_cap: 3145728`. The packaged implementation is
-`native-sequence-refine-v14-room-door-detail`: overlapping video windows,
+`native-sequence-refine-v15-fourteen-categories`: overlapping video windows,
 temporal review of proposed events, and an observation-first room-door path.
+All 14 catalogue categories are now explicitly screened and can be refined into
+source-frame-supported events. Missing-step categories use the complete candidate
+operation window; unobserved actions are not evidence of an omission. Small-object
+candidates use fewer, more detailed frames. This is configured coverage, not proof
+of recognition accuracy across all categories.
 This is the existing local inference implementation, not new model training.
 Only native 2B and native 4B are registered; unrelated focused and
 observation-native experiments are deliberately unavailable.
