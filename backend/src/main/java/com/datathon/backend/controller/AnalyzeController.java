@@ -76,12 +76,15 @@ public class AnalyzeController {
             if (jobId != null) {
                 analysisService.failJob(jobId, "SERVER_BUSY", "Server is busy, try again later");
             }
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                     .header(HttpHeaders.RETRY_AFTER, "30")
                     .body(Map.of("error", "Server is busy, try again later"));
 
         } catch (Exception e) {
             log.error("Failed to accept upload", e);
+            if (jobId != null) {
+                analysisService.failJob(jobId, "UPLOAD_FAILED", "Не удалось начать анализ. Повторите загрузку.");
+            }
             return error(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to save file");
 
         } finally {
