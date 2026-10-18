@@ -22,6 +22,18 @@ public class ViolationDto {
     @JsonProperty("timecode_sec")
     private Double timecodeSec;
 
+    @JsonProperty("start_sec")
+    private Double startSec;
+
+    @JsonProperty("end_sec")
+    private Double endSec;
+
+    @JsonProperty("category_id")
+    private String categoryId;
+
+    private String localization;
+    private String status;
+
     private String description;
 
     @JsonProperty("evidence_frames")
