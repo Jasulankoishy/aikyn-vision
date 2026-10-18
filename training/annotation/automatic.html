@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aikyn Vision · Автоматический анализ</title><link rel="stylesheet" href="/automatic.css"><script src="/automatic.js" defer></script></head>
+<body><header><a class="aikyn-editor-brand" href="http://127.0.0.1:8080/" aria-label="Aikyn Vision, главная"><svg class="aikyn-editor-mark" xmlns="http://www.w3.org/2000/svg" viewBox="180 235 1180 1130" aria-hidden="true"><path fill="#32b6bc" d="M205 262H463V322H265V522H205ZM1077 262H1335V522H1275V322H1077ZM205 1079H265V1278H463V1338H205ZM1275 1079H1335V1338H1077V1278H1275Z"/><path fill="#102f4c" d="M765 262 965 700 865 744 765 529 561 978Q820 800 1148 692L1181 795 1033 848 1173 1158H1052L931 891Q700 1010 494 1158H356Z"/></svg><b>Aikyn <span>Vision</span></b></a><div><span class="eyebrow">AIKYN VISION · LOCAL AI</span><h1>Автоматический анализ видео</h1></div></header>
+<section class="progress-panel"><div id="batchStatus" role="status">Загрузка результатов…</div><progress id="batchProgress" max="40" value="0"></progress><small id="accuracy">Достоверная точность в процентах пока не установлена.</small></section>
+<main><aside><label for="search">Видео</label><input id="search" type="search" placeholder="Найти видео"><nav id="videoList" aria-label="Список видео"></nav></aside>
+<section class="workspace"><div class="video-heading"><h2 id="filename">Выберите видео</h2><span id="resultBadge" class="badge">Ожидание</span></div><video id="video" controls preload="metadata"></video><p id="mediaError" hidden>Не удалось открыть видео в браузере.</p>
+<article class="answer" id="answerPanel" aria-busy="true">
+<div id="analysisLoading" class="analysis-loading" role="status" aria-live="polite">
+  <div class="loading-head"><div class="loading-orbit" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="m9 8 7 4-7 4V8Z" fill="currentColor"/></svg></div><div><span class="eyebrow">ЛОКАЛЬНЫЙ АНАЛИЗ</span><h2 id="loadingTitle">Анализируем видео</h2><p id="loadingHint">Смотрим фрагменты и последовательность действий.</p></div><span class="loading-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
+  <div class="loading-track" aria-hidden="true"><span></span></div>
+  <div class="loading-stages" aria-hidden="true"><span id="stageWatch" class="current">Просмотр</span><span id="stageRefine">Уточнение</span><span>Результат</span></div>
+  <small id="loadingCount" hidden></small><small class="loading-footer">Результат появится автоматически</small>
+</div>
+<div id="answerContent" hidden><span class="eyebrow">ОТВЕТ QWEN</span><h2 id="answerTitle"></h2><p id="answerText"></p><div id="events"></div><div id="uncertain"></div></div>
+</article>
+<p class="footnote">Проверяемые сценарии: деньги при смене клиента, объединение пачек, наличные при уходе кассира, открытый сейф и экран при уходе. Автоматические выводы могут ошибаться; отсутствие сигнала не подтверждает правильность всей операции.</p><p id="error" role="alert"></p></section></main></body></html>

@@ -14,9 +14,9 @@ const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const isMobile = () => matchMedia('(max-width: 767px)').matches;
 
 const prefs = (() => {
-  const KEY = 'forte-vision.prefs';
+  const KEY = 'aiqyn-vision.prefs';
   let data = {};
-  try { data = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { data = {}; }
+  try { data = JSON.parse(localStorage.getItem(KEY) || localStorage.getItem('forte-vision.prefs') || '{}') || {}; } catch (e) { data = {}; }
   return {
     get: (k, d) => (k in data ? data[k] : d),
     set(k, v) { data[k] = v; try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) { /* sandboxed: keep in memory */ } },
@@ -52,7 +52,7 @@ function toast({ title, desc = '', tone = 'ok', action = null, duration = 4200 }
    THEME: mode (light / dark / system), preset, density
    ===================================================================== */
 const root = document.documentElement;
-const PRESETS = [{ id: 'slate', name: 'Forte' }, { id: 'tangerine', name: 'Мандарин' }];
+const PRESETS = [{ id: 'slate', name: 'Aikyn' }, { id: 'tangerine', name: 'Мандарин' }];
 const theme = {
   mode: prefs.get('mode', 'light'), preset: prefs.get('preset', 'slate'), density: prefs.get('density', 'comfortable'),
 };
@@ -408,16 +408,17 @@ function openPalette() {
 $('#searchBtn').addEventListener('click', openPalette);
 
 
-/* Forte Vision application. API integration follows 04_frontend_demo.md.
+/* Aikyn Vision application. API integration follows 04_frontend_demo.md.
    API key, files, evidence and job state stay in memory; only theme is persisted. */
-const SITE = { product: 'Forte Vision' };
+const SITE = { product: 'Aikyn Vision' };
 const MAX_WAIT_MS = 300000;
 const POLL_MS = 1600;
 const state = {
   phase: 'idle', file: null, videoUrl: null, duration: null,
   jobId: null, jobBase: null, result: null, error: '', mode: null,
-  selected: 0, generation: 0, controller: null, timer: null, deadline: 0, localDemo: false,
-  ready: false, readyController: null, readyGeneration: 0,
+  selected: 0, generation: 0, controller: null, timer: null, clockTimer: null, startedAt: 0, deadline: 0, localDemo: false,
+  ready: false, readyMode: null, readyController: null, readyGeneration: 0,
+  pollErrors: 0, pollMessage: '', localSessionPromise: null,
 };
 const active = () => ['uploading', 'processing'].includes(state.phase);
 const hasJob = () => Boolean(state.jobId && !state.localDemo);
@@ -435,6 +436,22 @@ function safeSource(raw) {
   if (typeof raw !== 'string' || raw.length > 4096) return null;
   try { const u = new URL(raw); return ['https:', 'http:'].includes(u.protocol) && !u.username && !u.password ? u.href : null; } catch { return null; }
 }
+async function bootstrapLocalSession() {
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) || $('#apiBase').value.trim() || $('#apiKey').value.trim()) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch('/local-session', { headers: { 'X-Local-Bootstrap': '1' }, signal: controller.signal, cache: 'no-store', credentials: 'same-origin', redirect: 'error' });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (typeof data.api_key !== 'string' || data.api_key.length < 24 || data.api_key.length > 512 || $('#apiBase').value.trim() || $('#apiKey').value.trim()) return;
+    $('#apiKey').value = data.api_key;
+    $('#connectionNoteText').textContent = 'Локальное подключение настроено. Выберите видео и нажмите «Начать анализ».';
+    $('#sidebarStatus').textContent = 'Готов к загрузке';
+    readyMessage('Локальное подключение настроено автоматически. Ключ хранится только в памяти этой страницы.');
+  } catch { /* Remote/custom installations can still enter their API key in Settings. */ }
+  finally { clearTimeout(timer); }
+}
 function getConnection() {
   const raw = $('#apiBase').value.trim();
   const key = $('#apiKey').value.trim();
@@ -451,15 +468,17 @@ function invalidateReadiness() {
   $('#checkReady').disabled = false;
   $('#checkReady').classList.remove('is-loading');
   state.ready = false;
+  state.readyMode = null;
   $('#readyStatus').className = 'ready-status';
   $('#readyStatus').textContent = 'Настройки изменены. Проверьте готовность сервиса.';
   updateConnection();
 }
 function updateConnection() {
-  $('#sidebarStatus').textContent = state.ready ? 'Сервис готов' : 'API не проверен';
+  const testing = ['demo', 'test'].includes(state.readyMode);
+  $('#sidebarStatus').textContent = state.ready ? (testing ? 'API: тестовый режим' : state.readyMode === 'real' ? 'Сервис готов' : 'API доступен') : 'API не проверен';
   $('#sidebarDot').classList.toggle('ready', state.ready);
   $('#connectionNote').classList.toggle('ok', state.ready);
-  $('#connectionNoteText').textContent = state.ready ? 'Сервис команды готов. Выберите MOV и запустите проверку.' : 'Настройте подключение к серверу команды перед началом анализа.';
+  $('#connectionNoteText').textContent = state.ready ? (testing ? 'Подключён тестовый обработчик. Его ответы не подтверждают наличие или отсутствие нарушений.' : state.readyMode === 'real' ? 'Локальный анализатор готов. Выберите MOV и запустите проверку.' : 'API доступен, но режим модели не подтверждён сервером.') : 'Откройте настройки, введите локальный ключ и проверьте готовность анализатора.';
 }
 const HTTP_MESSAGES = {
   400: 'Сервер не смог принять запрос. Проверьте файл и настройки подключения.',
@@ -472,7 +491,13 @@ const HTTP_MESSAGES = {
   429: 'Очередь занята. Подождите и повторите действие позже.',
   503: 'Модель, каталог или обработчик ещё не готовы. Проверьте готовность сервиса.',
 };
-class ApiError extends Error { constructor(message, status = 0) { super(message); this.status = status; } }
+class ApiError extends Error { constructor(message, status = 0, retryable = false) { super(message); this.status = status; this.retryable = retryable; } }
+function serverErrorMessage(data) {
+  const message = typeof data?.error === 'string' ? data.error :
+    typeof data?.error?.message === 'string' ? data.error.message :
+    typeof data?.detail === 'string' ? data.detail : '';
+  return message.slice(0, 2000);
+}
 async function request(path, config, { method = 'GET', body, signal, timeout = 18000, expectedStatus } = {}) {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -488,8 +513,8 @@ async function request(path, config, { method = 'GET', body, signal, timeout = 1
     let data;
     try { data = text ? JSON.parse(text) : null; } catch { if (response.ok) throw new ApiError('Сервер вернул повреждённый ответ: ожидался JSON.'); }
     if (!response.ok) {
-      const extra = typeof data?.error?.message === 'string' ? data.error.message.slice(0,2000) : '';
-      throw new ApiError((HTTP_MESSAGES[response.status] || `Ошибка сервера (HTTP ${response.status}).`) + (extra ? ` Сообщение сервера: ${extra}` : ''), response.status);
+      const extra = serverErrorMessage(data);
+      throw new ApiError((HTTP_MESSAGES[response.status] || `Ошибка сервера (HTTP ${response.status}).`) + (extra ? ` Сообщение сервера: ${extra}` : ''), response.status, [408,429,502,503,504].includes(response.status));
     }
     if (expectedStatus && response.status !== expectedStatus) throw new ApiError(`Неожиданный HTTP-статус ${response.status}. Ожидался ${expectedStatus}. Запрос повторно не отправлен.`);
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new ApiError('Сервер вернул повреждённый ответ: ожидался объект JSON.');
@@ -497,8 +522,8 @@ async function request(path, config, { method = 'GET', body, signal, timeout = 1
   } catch (e) {
     if (e instanceof ApiError) throw e;
     if (signal?.aborted) throw e;
-    if (timedOut) throw new ApiError('Сервер не ответил вовремя. Проверьте соединение и состояние задания.');
-    throw new ApiError('Не удалось связаться с сервером. Проверьте адрес, доступность API и разрешение CORS.');
+    if (timedOut) throw new ApiError('Сервер не ответил вовремя. Проверьте соединение и состояние задания.', 0, true);
+    throw new ApiError('Не удалось связаться с сервером. Проверьте адрес, доступность API и разрешение CORS.', 0, true);
   } finally { clearTimeout(clock); signal?.removeEventListener('abort', abort); }
 }
 async function checkReady() {
@@ -509,19 +534,21 @@ async function checkReady() {
   const controller = new AbortController(); state.readyController = controller;
   const generation = ++state.readyGeneration;
   const button = $('#checkReady'); button.disabled = true;
-  readyMessage('Проверяем готовность модели, каталога и обработчика…');
+  readyMessage('Проверяем связь сайта с локальным анализатором…');
   try {
     const data = await request('/readyz', config, { signal: controller.signal });
     if (generation !== state.readyGeneration) return;
     const status = String(data.status || '').toLowerCase();
     if (data.ready === false || !((data.ready === true) || ['ready','ok','healthy'].includes(status))) throw new ApiError('Сервис отвечает, но не подтвердил готовность к анализу. Нужны ready: true или status: ready/ok/healthy от /readyz.');
     state.ready = true;
-    readyMessage('Сервис сообщил о готовности через /readyz. Можно запускать анализ.', true);
+    state.readyMode = normalizeMode(data.mode);
+    const testing = ['demo', 'test'].includes(state.readyMode);
+    readyMessage(testing ? 'API готов в тестовом режиме. Ответы не являются реальной проверкой видео.' : state.readyMode === 'real' ? 'Сервис сообщил о готовности через /readyz. Можно запускать анализ.' : 'API отвечает, но режим модели не указан. Реальное происхождение результатов не подтверждено.', true);
     updateConnection();
-    toast({ title: 'Сервис готов к проверке видео' });
+    toast({ title: testing ? 'Подключён тестовый API' : state.readyMode === 'real' ? 'Сервис сообщил о готовности' : 'Режим модели не подтверждён', tone: testing || !state.readyMode ? 'warn' : 'ok' });
   } catch(e) {
     if (generation !== state.readyGeneration) return;
-    state.ready = false; readyMessage(e.message, false); updateConnection();
+    state.ready = false; state.readyMode = null; readyMessage(e.message, false); updateConnection();
   } finally { if (generation === state.readyGeneration) { button.disabled = false; state.readyController = null; } }
 }
 function readyMessage(text, ok = null) {
@@ -532,6 +559,17 @@ function stopWork() {
   state.generation++;
   state.controller?.abort(); state.controller = null;
   clearTimeout(state.timer); state.timer = null;
+  clearTimeout(state.clockTimer); state.clockTimer = null;
+}
+function startElapsedClock() {
+  clearTimeout(state.clockTimer);
+  const tick = () => {
+    if (!active() || !state.startedAt) return;
+    const el = $('#processingElapsed');
+    if (el) el.textContent = seconds(Math.floor(Math.max(0, Date.now() - state.startedAt) / 1000));
+    state.clockTimer = setTimeout(tick, 1000);
+  };
+  tick();
 }
 function releaseVideo() {
   if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
@@ -539,7 +577,8 @@ function releaseVideo() {
 }
 function clearJob() {
   stopWork(); state.jobId = null; state.jobBase = null; state.result = null;
-  state.error = ''; state.mode = null; state.selected = 0; state.phase = 'idle'; state.localDemo = false;
+  state.error = ''; state.mode = null; state.selected = 0; state.phase = 'idle'; state.localDemo = false; state.startedAt = 0;
+  state.pollErrors = 0; state.pollMessage = '';
   $('#eventCount').hidden = true; $('#resultsDescription').textContent = 'События и доказательные кадры текущего задания.';
   renderResults(); renderRules();
 }
@@ -577,20 +616,23 @@ function renderUpload() {
 async function analyze() {
   if (active()) return;
   if (!state.file) { showFileError('Сначала выберите MOV-файл.'); navigate('overview'); return; }
+  if (!$('#apiKey').value.trim() && state.localSessionPromise) await state.localSessionPromise;
+  if (active() || !state.file) return;
   let config;
   try { config = getConnection(); if (!config.key) throw new Error('Введите ключ доступа в настройках.'); }
   catch(e) { readyMessage(e.message, false); navigate('settings'); $('#apiKey').focus(); return; }
   clearJob();
   const generation = state.generation;
-  state.phase = 'uploading'; state.mode = 'real'; state.jobBase = config.base; state.deadline = Date.now() + MAX_WAIT_MS;
+  state.phase = 'uploading'; state.mode = null; state.jobBase = config.base; state.startedAt = Date.now(); state.deadline = state.startedAt + MAX_WAIT_MS;
   state.controller = new AbortController(); const signal = state.controller.signal;
-  renderUpload(); renderResults(); navigate('results'); announce('Видео передаётся серверу.');
+  renderUpload(); renderResults(); startElapsedClock(); navigate('results'); announce('Видео передаётся серверу.');
   const form = new FormData(); form.append('file', state.file);
   try {
     const data = await request('/api/v1/analyze', config, { method:'POST', body:form, signal, timeout:90000, expectedStatus:202 });
     if (generation !== state.generation) return;
     if (typeof data.job_id !== 'string' || !data.job_id.trim() || data.job_id.length > 256 || data.status !== 'processing') throw new ApiError('Сервер не вернул корректные job_id и status: processing. Запрос повторно не отправлен.');
     state.jobId = data.job_id; state.mode = normalizeMode(data.mode); state.phase = 'processing';
+    state.deadline = Date.now() + MAX_WAIT_MS;
     renderResults(); announce('Задание создано. Выполняется анализ видео.');
     poll(config, generation, signal);
   } catch(e) {
@@ -603,28 +645,38 @@ async function analyze() {
 function normalizeMode(mode) { return ['real','demo','test'].includes(mode) ? mode : null; }
 async function poll(config, generation, signal) {
   if (generation !== state.generation || signal.aborted) return;
-  if (Date.now() > state.deadline) {
-    pauseJob('За 5 минут готовый ответ не получен. Задание сохранено; можно запросить его статус вручную.'); return;
+  if (Date.now() >= state.deadline) {
+    pauseJob('За 5 минут готовый ответ не получен. Нажмите «Запросить статус», чтобы продолжить без повторной загрузки видео.'); return;
   }
   try {
-    const data = await request('/api/v1/jobs/' + encodeURIComponent(state.jobId), config, { signal, timeout:18000 });
+    const data = await request('/api/v1/jobs/' + encodeURIComponent(state.jobId), config, { signal, timeout:Math.min(18000, state.deadline - Date.now()) });
     if (generation !== state.generation) return;
     if (data.job_id !== state.jobId) throw new ApiError('Ответ содержит идентификатор другого задания. Результат не показан.');
     const previousMode = state.mode;
+    const wasRetrying = Boolean(state.pollMessage);
+    state.pollErrors = 0; state.pollMessage = '';
     if (Object.hasOwn(data,'mode')) state.mode = normalizeMode(data.mode);
     if (data.status === 'processing') {
-      state.phase = 'processing'; if(previousMode !== state.mode) renderResults();
-      state.timer = setTimeout(() => poll(config, generation, signal), POLL_MS);
+      state.phase = 'processing'; if(previousMode !== state.mode || wasRetrying) renderResults();
+      state.timer = setTimeout(() => poll(config, generation, signal), Math.min(POLL_MS, Math.max(0, state.deadline - Date.now())));
     } else if (data.status === 'done') {
       const result = validateResult(data);
       state.result = result; state.mode = normalizeMode(data.mode); state.phase = 'done'; state.controller = null;
-      renderUpload(); renderResults(); renderRules(); announce('Анализ завершён. ' + (data.verdict==='violation' ? 'Обнаружены признаки возможных нарушений.' : 'Нарушение не обнаружено.'));
+      clearTimeout(state.clockTimer); state.clockTimer = null;
+      renderUpload(); renderResults(); renderRules(); announce('Анализ завершён. ' + (data.verdict==='violation' ? 'Найден подозрительный эпизод.' : 'Сигналов не найдено.'));
     } else if (data.status === 'failed') {
-      state.phase = 'error'; state.error = typeof data.error?.message === 'string' ? data.error.message.slice(0,8000) : 'Сервер сообщил об ошибке анализа без подробностей.';
-      state.controller = null; renderUpload(); renderResults(); announce('Анализ завершился ошибкой. Вердикта нет.');
+      state.phase = 'error'; state.error = serverErrorMessage(data) || 'Сервер сообщил об ошибке анализа без подробностей.';
+      state.controller = null; clearTimeout(state.clockTimer); state.clockTimer = null;
+      renderUpload(); renderResults(); announce('Анализ завершился ошибкой. Результат не получен.');
     } else throw new ApiError('Неизвестный статус задания. Ожидались processing, done или failed.');
   } catch(e) {
     if (generation !== state.generation || signal.aborted) return;
+    if (e.retryable && ++state.pollErrors <= 3 && Date.now() < state.deadline) {
+      state.pollMessage = `Связь с сервером прервалась. Восстанавливаем автоматически (${state.pollErrors}/3)…`;
+      renderResults();
+      state.timer = setTimeout(() => poll(config, generation, signal), Math.min(POLL_MS * state.pollErrors, Math.max(0, state.deadline - Date.now())));
+      return;
+    }
     pauseJob(e.message);
   }
 }
@@ -639,7 +691,8 @@ function resumeJob() {
   catch(e) { readyMessage(e.message, false); navigate('settings'); return; }
   stopWork(); const generation = state.generation;
   state.controller = new AbortController(); state.deadline = Date.now()+MAX_WAIT_MS; state.phase = 'processing'; state.error = '';
-  renderUpload(); renderResults(); announce('Запрашиваем состояние существующего задания.');
+  state.pollErrors = 0; state.pollMessage = '';
+  renderUpload(); renderResults(); startElapsedClock(); announce('Запрашиваем состояние существующего задания.');
   poll(config, generation, state.controller.signal);
 }
 function validateResult(data) {
@@ -654,6 +707,21 @@ function validateResult(data) {
     }
     if (v.rule != null && (typeof v.rule !== 'object' || Array.isArray(v.rule))) invalid();
   }
+  if (data.analysis != null) {
+    const a = data.analysis;
+    if (typeof a !== 'object' || Array.isArray(a) || a.complete === false || a.timeline_covered === false) invalid();
+    if (a.experimental === true && (a.complete !== true || a.timeline_covered !== true || !Number.isInteger(a.windows_total) || a.windows_total <= 0 || !Number.isInteger(a.windows_done) || a.windows_done !== a.windows_total)) invalid();
+    for (const key of ['experimental', 'new_training', 'complete', 'timeline_covered']) if (a[key] != null && typeof a[key] !== 'boolean') invalid();
+    for (const key of ['sample_fps', 'window_seconds', 'stride_seconds', 'elapsed_sec']) if (a[key] != null && !nonnegative(a[key])) invalid();
+    for (const key of ['windows_total', 'windows_done']) if (a[key] != null && (!nonnegative(a[key]) || !Number.isInteger(a[key]))) invalid();
+    if (a.localization != null && (typeof a.localization !== 'string' || a.localization.length > 100)) invalid();
+    if (a.windows_total != null && a.windows_done != null && a.windows_done !== a.windows_total) invalid();
+    if (a.limitations != null && (!Array.isArray(a.limitations) || a.limitations.length > 100 || a.limitations.some(s => typeof s !== 'string' || s.length > 10000))) invalid();
+    if (a.review_questions != null) {
+      if (!Array.isArray(a.review_questions) || a.review_questions.length > 500) invalid();
+      for (const q of a.review_questions) if (!q || typeof q.type !== 'string' || !q.type.trim() || q.type.length > 1000 || !nonnegative(q.timecode_sec) || typeof q.message !== 'string' || !q.message.trim() || q.message.length > 10000) invalid();
+    }
+  }
   return data;
 }
 function modeBanner() {
@@ -662,6 +730,27 @@ function modeBanner() {
   return '';
 }
 function jobMarkup() { return state.jobId ? `<div class="job-id" aria-label="Идентификатор задания">${esc(state.jobId)}</div>` : ''; }
+function isApproximateTiming() { return state.result?.analysis?.localization === 'approximate_window'; }
+function eventTime(n) { return (isApproximateTiming() ? '≈ ' : '') + seconds(n); }
+function renderAnalysisSummary(analysis) {
+  if (!analysis) return '';
+  const facts = [];
+  if (analysis.new_training === false) facts.push('Предобученная модель, без дообучения');
+  if (Number.isInteger(analysis.windows_done) && Number.isInteger(analysis.windows_total)) facts.push(`Обработано фрагментов: ${analysis.windows_done} / ${analysis.windows_total}`);
+  if (Number.isFinite(analysis.sample_fps)) facts.push(`Выборка: ${analysis.sample_fps} кадра/с`);
+  if (Number.isFinite(analysis.window_seconds)) facts.push(`Фрагменты по ${analysis.window_seconds} с${Number.isFinite(analysis.stride_seconds) ? `, начало каждые ${analysis.stride_seconds} с` : ''}`);
+  if (Number.isFinite(analysis.elapsed_sec)) facts.push(`Обработка на сервере: ${seconds(analysis.elapsed_sec)}`);
+  const limitations = analysis.limitations || [];
+  const approximate = analysis.localization === 'approximate_window';
+  if (!facts.length && !limitations.length && !analysis.experimental && !approximate) return '';
+  return `<details class="card analysis-summary"><summary>Сведения об анализе</summary><h2>${analysis.experimental ? 'Экспериментальный анализ' : 'Обработка видео'}</h2>${facts.length ? `<div class="analysis-facts">${facts.map(f => `<span>${esc(f)}</span>`).join('')}</div>` : ''}${approximate ? '<p><strong>Примерное время событий.</strong> Метка указывает на проверяемый фрагмент, а не на точное начало действия. Просмотрите контекст до и после неё. Время отдельного кадра указано по исходному видео.</p>' : ''}${analysis.complete && analysis.timeline_covered ? '<p>Обработаны все запланированные фрагменты по всей длительности видео. Использовалась выборка кадров: быстрые и плохо видимые действия могли быть пропущены.</p>' : ''}${limitations.length ? `<details><summary>Ограничения этой проверки (${limitations.length})</summary><ul>${limitations.map(s => `<li>${esc(s)}</li>`).join('')}</ul></details>` : ''}</details>`;
+}
+function renderReviewQuestions(analysis) {
+  const questions = analysis?.review_questions || [];
+  if (!questions.length) return '';
+  const canSeek = Boolean(state.videoUrl && state.mode !== 'demo');
+  return `<details class="card review-questions"><summary>Дополнительные наблюдения (${questions.length})</summary><p class="questions-intro">Наблюдения модели с таймкодами. Они не включены в найденные подозрительные эпизоды.</p><ul>${questions.map((q, i) => `<li><div class="question-heading"><h3>${esc(q.type)}</h3>${canSeek ? `<button class="btn btn-outline btn-sm mono" type="button" data-question-seek="${i}" aria-label="Открыть вопрос ${i + 1} на ${esc(eventTime(q.timecode_sec))}">${ic('play')}${esc(eventTime(q.timecode_sec))}</button>` : `<span class="badge mono">${esc(eventTime(q.timecode_sec))}</span>`}</div><p>${esc(q.message)}</p></li>`).join('')}</ul></details>`;
+}
 function renderResults() {
   const content = $('#resultContent');
   $('#resultsDescription').textContent = state.file && state.mode !== 'demo' ? state.file.name : 'События и доказательные кадры текущего задания.';
@@ -670,30 +759,30 @@ function renderResults() {
   }
   if (active()) {
     const upload = state.phase === 'uploading';
-    content.innerHTML = modeBanner() + `<div class="card processing-card"><div class="processing-orbit">${ic(upload ? 'upload' : 'activity')}</div><span class="step-label">${state.mode==='demo'?'ДЕМОНСТРАЦИЯ ИНТЕРФЕЙСА':'ПРОВЕРКА В ПРОЦЕССЕ'}</span><h2 style="margin-top:12px">${upload?'Передаём видео серверу':'Анализируем видео'}</h2><p>${upload?'Оставьте страницу открытой. После приёма файла сервер вернёт идентификатор задания.':'Ищем события и ожидаем доказательные кадры. Процент готовности сервер не сообщает.'}</p><div class="wait-indicator" aria-hidden="true"><i></i></div><div class="stage-list"><span class="${upload?'active':''}">${ic(upload?'upload':'check')}Передача видео</span><span class="${!upload?'active':''}">${ic('activity')}Обработка</span><span>${ic('list-checks')}Результат</span></div>${jobMarkup()}<button class="btn btn-outline" type="button" data-action="pause">${upload?'Прекратить ожидание загрузки':'Прекратить ожидание'}</button><p class="player-hint">Это остановит ожидание в браузере. Серверная задача может продолжить работу.</p></div>`;
+    content.innerHTML = modeBanner() + `<div class="card processing-card"><div class="processing-orbit">${ic(upload ? 'upload' : 'activity')}</div><span class="step-label">${state.mode==='demo'?'ДЕМОНСТРАЦИЯ ИНТЕРФЕЙСА':'ПРОВЕРКА В ПРОЦЕССЕ'}</span><h2 style="margin-top:12px">${upload?'Передаём видео серверу':'Анализируем видео'}</h2><p>${upload?'Оставьте страницу открытой. После приёма файла сервер вернёт идентификатор задания.':'Автоматически ищем события, таймкоды и кадры. Результат появится здесь.'}</p><div class="wait-indicator" aria-hidden="true"><i></i></div><div class="stage-list"><span class="${upload?'active':''}">${ic(upload?'upload':'check')}Передача видео</span><span class="${!upload?'active':''}">${ic('activity')}Обработка</span><span>${ic('list-checks')}Результат</span></div>${state.startedAt ? '<p class="processing-time">Прошло с отправки: <strong id="processingElapsed" class="mono">' + seconds(Math.floor(Math.max(0, Date.now() - state.startedAt) / 1000)) + '</strong> · до 5 минут после загрузки</p>' : ''}${state.pollMessage ? '<p role="status" class="player-hint">' + esc(state.pollMessage) + '</p>' : ''}${jobMarkup()}<button class="btn btn-outline" type="button" data-action="pause">${upload?'Прекратить ожидание загрузки':'Прекратить ожидание'}</button><p class="player-hint">Это остановит ожидание в браузере. Серверная задача может продолжить работу.</p></div>`;
     return;
   }
   if (['error','paused'].includes(state.phase)) {
     const paused = state.phase === 'paused';
-    content.innerHTML = modeBanner() + `<div class="empty-state error-state">${ic(paused?'link':'circle-alert')}<h2>${paused?'Ожидание приостановлено':'Не удалось завершить проверку'}</h2><p>${esc(state.error)}</p><span class="badge">Вердикта нет</span>${jobMarkup()}<div class="empty-actions">${hasJob()?'<button class="btn btn-primary" type="button" data-action="resume">Запросить статус</button>':''}<a class="btn btn-outline" href="#/settings">Настройки подключения</a><button class="btn btn-outline" type="button" data-action="new">Новая проверка</button></div></div>`;
+    content.innerHTML = modeBanner() + `<div class="empty-state error-state">${ic(paused?'link':'circle-alert')}<h2>${paused?'Ожидание приостановлено':'Не удалось завершить проверку'}</h2><p>${esc(state.error)}</p><span class="badge">Результат не получен</span>${jobMarkup()}<div class="empty-actions">${hasJob()?'<button class="btn btn-primary" type="button" data-action="resume">Запросить статус</button>':''}<a class="btn btn-outline" href="#/settings">Настройки подключения</a><button class="btn btn-outline" type="button" data-action="new">Новая проверка</button></div></div>`;
     return;
   }
   const result = state.result; if (!result) return;
   const events = result.violations; const violation = result.verdict === 'violation';
   $('#eventCount').textContent = events.length; $('#eventCount').hidden = !events.length;
   const analysis = result.analysis && typeof result.analysis === 'object' ? result.analysis : null;
-  content.innerHTML = modeBanner() + `<div class="result-summary"><div class="verdict-icon ${violation?'':'clear'}">${ic(violation?'flag':'circle-check')}</div><div><h2>${violation?'Обнаружены признаки возможных нарушений':'Нарушение не обнаружено'}</h2><p>${violation?'Рассмотрите каждое событие в контексте исходной записи.':'Сервер вернул результат без найденных событий. Он относится только к текущей записи.'}</p></div><div class="summary-count"><b>${events.length}</b><span>событий в ответе</span></div></div><div class="job-strip"><span>Задание: <strong class="mono">${esc(result.job_id)}</strong></span><span>Режим: <strong>${state.mode === 'real'?'REAL':state.mode ? esc(state.mode.toUpperCase()):'не указан'}</strong></span>${analysis?'<button class="text-link" data-action="analysis-info" type="button" style="margin:0">Сведения об анализе</button>':''}</div>${events.length?`<div class="timeline"><div class="timeline-labels"><span>СОБЫТИЯ НА ВРЕМЕННОЙ ШКАЛЕ</span><span>${state.mode==='demo'?'Тестовая запись':'От начала видео'}</span></div><div class="timeline-track" role="group" aria-label="Перейти к событию">${events.map((v,i)=>{const end = Math.max(state.duration || 0, ...events.map(x=>x.timecode_sec),1)*1.08;return `<button class="timeline-tick" type="button" data-select="${i}" data-time="${esc(seconds(v.timecode_sec))}" style="left:${clamp(v.timecode_sec/end*100,2,98)}%" aria-label="Событие ${i+1}, ${esc(seconds(v.timecode_sec))}" aria-pressed="${state.selected===i}"></button>`;}).join('')}</div></div><div class="result-layout"><div class="card event-list"><div class="list-heading"><h2>События</h2><span class="badge">${events.length}</span></div>${events.map((v,i)=>`<button class="event-item" type="button" data-select="${i}" aria-pressed="${state.selected===i}"><span class="event-num">${String(i+1).padStart(2,'0')}</span><span><b>${esc(v.type)}</b><span class="event-time">${esc(seconds(v.timecode_sec))}</span></span>${ic('chevron-right')}</button>`).join('')}</div><div id="eventDetail" class="card"></div></div>`:`<div class="empty-state">${ic('shield-check')}<h2>Событий для просмотра нет</h2><p>Обработка завершена успешно. Для этой записи сервер вернул пустой список событий.</p><button class="btn btn-outline" type="button" data-action="new">Проверить другое видео</button></div>`}<div class="review-note">${ic('info')}<p>Вывод системы требует проверки человеком и не является установлением виновности.</p></div>`;
+  content.innerHTML = modeBanner() + `<div class="result-summary"><div class="verdict-icon ${violation?'':'clear'}">${ic(violation?'flag':'circle-check')}</div><div><h2>${violation?'Найден подозрительный эпизод':'Сигналов не найдено'}</h2><p>${violation?'Выберите таймкод, чтобы открыть эпизод в исходном видео.':'Анализ завершён. Подозрительные эпизоды не отмечены.'}</p></div><div class="summary-count"><b>${events.length}</b><span>событий в ответе</span></div></div><div class="job-strip"><span>Задание: <strong class="mono">${esc(result.job_id)}</strong></span><span>Режим: <strong>${state.mode === 'real'?'REAL':state.mode ? esc(state.mode.toUpperCase()):'не указан'}</strong></span>${analysis?'<button class="text-link" data-action="analysis-info" type="button" style="margin:0">Сведения об анализе</button>':''}</div>${renderAnalysisSummary(analysis)}${events.length?`<div class="timeline"><div class="timeline-labels"><span>СОБЫТИЯ НА ВРЕМЕННОЙ ШКАЛЕ</span><span>${state.mode==='demo'?'Тестовая запись':'От начала видео'}</span></div><div class="timeline-track" role="group" aria-label="Перейти к событию">${events.map((v,i)=>{const end = Math.max(state.duration || 0, ...events.map(x=>x.timecode_sec),1)*1.08;return `<button class="timeline-tick" type="button" data-select="${i}" data-time="${esc(eventTime(v.timecode_sec))}" style="left:${clamp(v.timecode_sec/end*100,2,98)}%" aria-label="Событие ${i+1}, ${esc(eventTime(v.timecode_sec))}" aria-pressed="${state.selected===i}"></button>`;}).join('')}</div></div><div class="result-layout"><div class="card event-list"><div class="list-heading"><h2>События</h2><span class="badge">${events.length}</span></div>${events.map((v,i)=>`<button class="event-item" type="button" data-select="${i}" aria-pressed="${state.selected===i}"><span class="event-num">${String(i+1).padStart(2,'0')}</span><span><b>${esc(v.type)}</b><span class="event-time">${esc(eventTime(v.timecode_sec))}</span></span>${ic('chevron-right')}</button>`).join('')}</div><div id="eventDetail" class="card"></div></div>`:`<div class="empty-state">${ic('shield-check')}<h2>Событий для просмотра нет</h2><p>Можно загрузить следующую запись.</p><button class="btn btn-outline" type="button" data-action="new">Проверить другое видео</button></div>`}${renderReviewQuestions(analysis)}<div class="review-note">${ic('info')}<p>Вывод системы требует проверки человеком и не является установлением виновности.</p></div>`;
   if (events.length) renderEvent();
 }
 function renderRule(rule) {
-  if (!rule || typeof rule !== 'object') return `<div class="rule-card"><div class="rule-label">${ic('book')}Нормативное основание</div><p>Сервер не передал отдельное нормативное основание. Проверьте описание события и запросите проверенный источник у команды.</p></div>`;
+  if (!rule || typeof rule !== 'object') return `<div class="rule-card"><div class="rule-label">${ic('book')}Нормативное основание</div><p>Нормативное основание требует проверки. Сервер не передал подтверждённый источник для этого события.</p></div>`;
   const source = safeSource(rule.source_url);
-  return `<div class="rule-card"><div class="rule-label">${ic('book')}${state.mode==='demo'?'Тестовое основание':'Нормативное основание'}${rule.id ? ' / '+esc(String(rule.id).slice(0,300)):''}</div><h3>${esc(typeof rule.document==='string'?rule.document:'Документ не указан сервером')}</h3><p>${esc(typeof rule.section==='string'?rule.section:'Раздел не указан сервером')}</p>${source?`<a class="text-link" href="${esc(source)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Открыть первоисточник${ic('arrow-up-right')}</a>`:`<p>${state.mode==='demo'?'Ссылка отсутствует: учебный сценарий не ссылается на реальную норму.':'Безопасная ссылка на источник не передана сервером.'}</p>`}</div>`;
+  return `<div class="rule-card"><div class="rule-label">${ic('book')}${state.mode==='demo'?'Тестовое основание':'Источник для проверки основания'}${rule.id ? ' / '+esc(String(rule.id).slice(0,300)):''}</div><h3>${esc(typeof rule.document==='string'?rule.document:'Документ не указан сервером')}</h3><p>${esc(typeof rule.section==='string'?rule.section:'Раздел не указан сервером')}</p>${source?`<a class="text-link" href="${esc(source)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Открыть первоисточник${ic('arrow-up-right')}</a>`:`<p>${state.mode==='demo'?'Ссылка отсутствует: учебный сценарий не ссылается на реальную норму.':'Безопасная ссылка на источник не передана сервером.'}</p>`}</div>`;
 }
 function renderEvent() {
   const event = state.result?.violations[state.selected]; if(!event || !$('#eventDetail')) return;
   const seekAvailable = Boolean(state.videoUrl && state.mode !== 'demo');
-  $('#eventDetail').innerHTML = `<div class="detail-header"><div class="detail-eyebrow"><span>СОБЫТИЕ ${String(state.selected+1).padStart(2,'0')}</span><span class="badge mono">${esc(seconds(event.timecode_sec))}</span></div><h2>${esc(event.type)}</h2><p>${esc(event.description)}</p>${seekAvailable?'<button class="btn btn-outline btn-sm" type="button" data-action="seek-video">'+ic('play')+'Открыть момент в видео</button>':''}</div><div class="evidence-section"><h3>${state.mode==='demo'?'Синтетические кадры':'Доказательные кадры'} <span class="muted">/ ${event.evidence_frames.length}</span></h3><div class="evidence-grid">${event.evidence_frames.map((frame,i)=>`<figure><button class="frame-button" type="button" data-frame="${i}" aria-label="Открыть кадр ${i+1} на ${esc(seconds(frame.timestamp_sec))}"><img src="data:image/jpeg;base64,${frame.image_base64}" alt="${state.mode==='demo'?'Синтетическая схема':'Кадр из ответа сервера'}, отметка ${esc(seconds(frame.timestamp_sec))}" width="480" height="300" loading="lazy"><span class="expand-hint">${ic('arrow-up-right')}</span></button><figcaption><span>${state.mode==='demo'?'СХЕМА / ДЕМО':'КАДР '+String(i+1).padStart(2,'0')}</span><span class="mono">${esc(seconds(frame.timestamp_sec))}</span></figcaption></figure>`).join('')}</div></div>${renderRule(event.rule)}`;
+  $('#eventDetail').innerHTML = `<div class="detail-header"><div class="detail-eyebrow"><span>СОБЫТИЕ ${String(state.selected+1).padStart(2,'0')}${isApproximateTiming() ? ' · Примерное время' : ''}</span>${seekAvailable ? '<button class="btn btn-outline btn-sm mono" type="button" data-action="seek-video" aria-label="Перейти к времени события">' + esc(eventTime(event.timecode_sec)) + '</button>' : '<span class="badge mono">' + esc(eventTime(event.timecode_sec)) + '</span>'}</div><h2>${esc(event.type)}</h2><p>${esc(event.description)}</p>${seekAvailable?'<button class="btn btn-outline btn-sm" type="button" data-action="seek-video">'+ic('play')+'Открыть момент в видео</button>':''}</div><div class="evidence-section"><h3>${state.mode==='demo'?'Синтетические кадры':'Кадры для проверки'} <span class="muted">/ ${event.evidence_frames.length}</span></h3><div class="evidence-grid">${event.evidence_frames.map((frame,i)=>`<figure><button class="frame-button" type="button" data-frame="${i}" aria-label="Открыть кадр ${i+1} на ${esc(seconds(frame.timestamp_sec))}"><img src="data:image/jpeg;base64,${frame.image_base64}" alt="${state.mode==='demo'?'Синтетическая схема':'Кадр из ответа сервера'}, отметка ${esc(seconds(frame.timestamp_sec))}" width="480" height="300" loading="lazy"><span class="expand-hint">${ic('arrow-up-right')}</span></button><figcaption><span>${state.mode==='demo'?'СХЕМА / ДЕМО':'КАДР '+String(i+1).padStart(2,'0')}</span>${seekAvailable ? `<button class="text-link mono" type="button" data-frame-seek="${i}" aria-label="Открыть видео на ${esc(seconds(frame.timestamp_sec))}">${esc(seconds(frame.timestamp_sec))}</button>` : `<span class="mono">${esc(seconds(frame.timestamp_sec))}</span>`}</figcaption></figure>`).join('')}</div></div>${renderRule(event.rule)}`;
   $$('#eventDetail img').forEach(img=>img.addEventListener('error',()=>{const box=document.createElement('div');box.className='frame-missing';box.textContent='Кадр не удалось открыть. Проверьте JPEG в ответе сервера.';img.closest('.frame-button').replaceWith(box);},{once:true}));
 }
 function selectEvent(index) {
@@ -705,15 +794,15 @@ function selectEvent(index) {
 function renderRules() {
   const events = state.result?.violations || [];
   const withRules = events.filter(v=>v.rule && typeof v.rule === 'object');
-  $('#rulesContent').innerHTML = withRules.length ? modeBanner() + `<div class="rule-list">${withRules.map(v=>`<article class="card"><span class="step-label">СОБЫТИЕ / ${esc(seconds(v.timecode_sec))}</span><h2 style="margin-top:12px">${esc(v.type)}</h2>${renderRule(v.rule)}</article>`).join('')}</div>` : `<div class="empty-state">${ic('book')}<h2>Основания появятся вместе с результатом</h2><p>Документ, раздел и ссылка приходят из общего API. Здесь отображаются только основания событий текущего задания; отдельный каталог интерфейс не выдумывает.</p><a class="btn btn-outline" href="#/results">К результатам проверки</a></div>`;
+  $('#rulesContent').innerHTML = withRules.length ? modeBanner() + `<div class="rule-list">${withRules.map(v=>`<article class="card"><span class="step-label">СОБЫТИЕ / ${esc(eventTime(v.timecode_sec))}</span><h2 style="margin-top:12px">${esc(v.type)}</h2>${renderRule(v.rule)}</article>`).join('')}</div>` : `<div class="empty-state">${ic('book')}<h2>Основания появятся вместе с результатом</h2><p>Документ, раздел и ссылка приходят из общего API. Здесь отображаются только основания событий текущего задания; отдельный каталог интерфейс не выдумывает.</p><a class="btn btn-outline" href="#/results">К результатам проверки</a></div>`;
 }
 function showFrame(index) {
   const frame = state.result?.violations[state.selected]?.evidence_frames[index]; if(!frame) return;
   openDialog({title:`Кадр ${index+1} / ${seconds(frame.timestamp_sec)}`,desc:state.mode==='demo'?'Синтетическая схема для демонстрации интерфейса.':'Изображение получено от сервера для текущего задания.',width:960,body:`<img class="expanded-frame" src="data:image/jpeg;base64,${frame.image_base64}" alt="${esc('Кадр, '+seconds(frame.timestamp_sec))}" width="960" height="600">`,foot:'<button class="btn btn-outline" data-close type="button">Закрыть</button>'});
 }
-function showVideo() {
-  const event=state.result?.violations[state.selected]; if(!event || !state.videoUrl || state.mode==='demo')return;
-  openDialog({title:'Момент в исходной записи',desc:`Событие на ${seconds(event.timecode_sec)}. Воспроизведение MOV зависит от браузера.`,width:900,body:'<div class="video-wrap"><video id="seekPlayer" controls preload="metadata" playsinline aria-label="Момент в исходном видео"></video></div><p class="player-hint" id="seekHint">Если видео не открывается, используйте кадры из ответа сервера.</p>',foot:'<button class="btn btn-outline" data-close type="button">Закрыть</button>',onMount(el,layer){const video=el.querySelector('video');video.src=state.videoUrl;video.addEventListener('loadedmetadata',()=>{try{video.currentTime=Math.min(event.timecode_sec,Number.isFinite(video.duration)?video.duration:event.timecode_sec);}catch{}});video.addEventListener('error',()=>el.querySelector('#seekHint').textContent='Этот MOV не воспроизводится в браузере. Доказательные кадры доступны в карточке события.');layer.onClose=()=>{video.pause();video.removeAttribute('src');video.load();};}});
+function showVideo(timecode = state.result?.violations[state.selected]?.timecode_sec, approximate = isApproximateTiming()) {
+  if (!Number.isFinite(timecode) || timecode < 0 || !state.videoUrl || state.mode === 'demo') return;
+  openDialog({title:'Момент в исходной записи',desc:`${approximate ? 'Примерное время' : 'Отметка'} ${seconds(timecode)}.${approximate ? ' Посмотрите контекст до и после отметки.' : ''} Воспроизведение MOV зависит от браузера.`,width:900,body:'<div class="video-wrap"><video id="seekPlayer" controls preload="metadata" playsinline aria-label="Момент в исходном видео"></video></div><p class="player-hint" id="seekHint">Если видео не открывается, проверьте этот таймкод в локальном видеоплеере.</p>',foot:'<button class="btn btn-outline" data-close type="button">Закрыть</button>',onMount(el,layer){const video=el.querySelector('video');video.src=state.videoUrl;video.addEventListener('loadedmetadata',()=>{try{video.currentTime=Math.min(timecode,Number.isFinite(video.duration)?video.duration:timecode);}catch{}});video.addEventListener('error',()=>el.querySelector('#seekHint').textContent='Этот MOV не воспроизводится в браузере. Откройте исходный файл в локальном видеоплеере и перейдите к указанному времени.');layer.onClose=()=>{video.pause();video.removeAttribute('src');video.load();};}});
 }
 function syntheticFrame(variant=0) {
   const canvas=document.createElement('canvas');canvas.width=720;canvas.height=450;
@@ -788,6 +877,8 @@ function boot() {
     const demo=e.target.closest('[data-demo]');if(demo){runDemo(demo.dataset.demo);return;}
     const select=e.target.closest('[data-select]');if(select){selectEvent(+select.dataset.select);return;}
     const frame=e.target.closest('[data-frame]');if(frame){showFrame(+frame.dataset.frame);return;}
+    const frameSeek=e.target.closest('[data-frame-seek]');if(frameSeek){const f=state.result?.violations[state.selected]?.evidence_frames?.[Number(frameSeek.dataset.frameSeek)];if(f)showVideo(f.timestamp_sec,false);return;}
+    const question=e.target.closest('[data-question-seek]');if(question){const q=state.result?.analysis?.review_questions?.[Number(question.dataset.questionSeek)];if(q)showVideo(q.timecode_sec);return;}
     const action=e.target.closest('[data-action]')?.dataset.action;
     if(action==='analyze')analyze();
     if(action==='resume')resumeJob();
@@ -807,6 +898,7 @@ function boot() {
   document.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openPalette();}if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='b'){e.preventDefault();setSidebar(!sidebarOpen());}});
   window.addEventListener('beforeunload',()=>{stopWork();releaseVideo();});
   applyTheme();renderUpload();renderResults();renderRules();route();observeTop();
+  state.localSessionPromise = bootstrapLocalSession();
 }
 boot();
 
