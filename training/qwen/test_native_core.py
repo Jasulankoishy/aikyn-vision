@@ -67,6 +67,17 @@ def test_candidates_require_model_positive_and_keep_disjoint_episodes():
     assert not risk_candidates([outcome(0,0,20)])
 
 
+def test_missing_count_or_identification_action_never_creates_omission_candidate():
+    row = outcome(0, 0, 20, cash_received='seen', cash_stored='seen',
+                  cash_counted='not_seen', document_checked='not_seen',
+                  cash_receipt_without_visible_count='unclear',
+                  cash_receipt_without_visible_identity_check='unclear')
+    assert not risk_candidates([row])
+    prompt = checklist_prompt(0, 20, [])
+    assert 'Never convert a not_seen action into a seen risk' in prompt
+    assert 'partial operation or hidden stage means unclear' in prompt
+
+
 def test_dense_boundaries_must_be_actual_temporal_patch_support():
     frames=[{'time_sec':10.0},{'time_sec':10.266667},{'time_sec':10.5},{'time_sec':10.766667}]
     choices=localization_choices(frames)
