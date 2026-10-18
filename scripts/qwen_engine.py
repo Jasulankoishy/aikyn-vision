@@ -7,6 +7,8 @@ import subprocess
 import threading
 import time
 from uuid import uuid4
+from analysis_contract import AnalysisContractError, enforce_evidence_contract
+from regulatory_context import enrich_regulatory_context
 
 WORKSPACE = Path(__file__).resolve().parents[1]
 MAX_LINE_BYTES = 32 * 1024 * 1024
@@ -215,7 +217,10 @@ class QwenEngine:
             if (analysis.get("complete") is not True or analysis.get("timeline_covered") is not True
                     or type(done) is not int or type(total) is not int or done != total or total <= 0):
                 raise QwenWorkerError("incomplete_analysis", "The model could not analyze the entire video; no verdict was issued")
-            return result
+            try:
+                return enrich_regulatory_context(enforce_evidence_contract(result))
+            except (AnalysisContractError, TypeError, AttributeError, KeyError) as error:
+                raise QwenWorkerError("incomplete_analysis", "Analysis evidence could not be validated; no verdict was issued") from error
         except (TimeoutError, BrokenPipeError, OSError):
             broken = True
             self._stop_process()
