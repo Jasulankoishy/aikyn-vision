@@ -6,7 +6,20 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from analysis_contract import AnalysisContractError, enforce_evidence_contract
+from analysis_contract import AnalysisContractError, NATIVE_KINDS, enforce_evidence_contract
+
+
+ALL_CATEGORIES = (
+    ("c01", "old_cash_at_client_change"), ("c02", "cash_mixed"),
+    ("c03", "cash_receipt_without_visible_count"),
+    ("c04", "cash_receipt_without_visible_identity_check"),
+    ("c05", "cash_counted_after_client_departure"),
+    ("c06", "cash_unattended"), ("c07", "package_left_unattended"),
+    ("c08", "safe_open_when_left"), ("c09", "safe_key_left_in_lock"),
+    ("c10", "documents_or_seals_left_unattended"),
+    ("c11", "screen_unlocked_when_left"), ("c12", "room_door_left_open"),
+    ("c13", "personal_items_in_cash_area"), ("c14", "rejected_banknotes_recombined"),
+)
 
 
 def result():
@@ -23,6 +36,49 @@ def result():
                          "start_sec": 0., "end_sec": 4.,
                          "sampling": {"sampled_timestamps": [0., 2., 4.]}}],
     }}
+
+
+def test_exact_fourteen_supported_categories_without_unknown_fallback():
+    assert NATIVE_KINDS == dict(ALL_CATEGORIES)
+    data = result()
+    data["violations"][0]["category_id"] = "c99"
+    data["analysis"]["refinements"][0]["kind"] = "unknown_action"
+    with pytest.raises(AnalysisContractError):
+        enforce_evidence_contract(data)
+    assert "reporting_policy" not in data["analysis"]
+
+
+@pytest.mark.parametrize("category,kind", ALL_CATEGORIES)
+def test_every_category_preserves_a_properly_reviewed_source_candidate(category, kind):
+    data = result()
+    data["violations"][0]["category_id"] = category
+    data["analysis"]["refinements"][0]["kind"] = kind
+    accepted = enforce_evidence_contract(data)
+    assert len(accepted["violations"]) == 1
+    assert accepted["violations"][0]["category_id"] == category
+    assert accepted["analysis"]["result_status"] == "possible_sign_requires_review"
+    assert accepted["analysis"]["compliance_established"] is False
+
+
+@pytest.mark.parametrize("category,kind", ALL_CATEGORIES)
+@pytest.mark.parametrize("fault", ["invented_frame", "missing_review", "unfinished_queue"])
+def test_every_category_rejects_missing_source_or_review_support(category, kind, fault):
+    data = result()
+    data["violations"][0]["category_id"] = category
+    data["analysis"]["refinements"][0]["kind"] = kind
+    if fault == "invented_frame":
+        # Even matching event and refinement metadata cannot invent a source frame.
+        data["violations"][0]["evidence_frames"][0]["timestamp_sec"] = 1.
+        data["analysis"]["refinements"][0]["sampling"]["sampled_timestamps"] = [0., 1., 4.]
+    elif fault == "missing_review":
+        data["analysis"]["refinements"] = []
+    else:
+        data["analysis"]["candidate_review"].update(status="running", done=0, remaining=1)
+    with pytest.raises(AnalysisContractError):
+        enforce_evidence_contract(data)
+    assert len(data["violations"]) == 1
+    assert data["verdict"] == "violation"
+    assert "reporting_policy" not in data["analysis"]
 
 
 def test_valid_door_candidate_remains_a_candidate_even_if_general_checklist_missed_it():
