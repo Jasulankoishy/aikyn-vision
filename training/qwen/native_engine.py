@@ -19,14 +19,16 @@ from quick_core import merge_observations, sequence_view
 from sequence_core import summarize
 from temporal_core import windows
 from review_findings import build_findings, PUBLIC_CASH_RULE
-VERSION='native-sequence-refine-v10-room-door-context'
+from door_observation import infer_door_observation
+
+VERSION='native-sequence-refine-v14-room-door-detail'
 RISK_TITLES={
     'cash_mixed':('c02','Возможное объединение пачек наличных'),
     'old_cash_at_client_change':('c01','Возможное оставление наличных при смене клиента'),
     'cash_unattended':('c06','Возможное оставление наличных при уходе кассира'),
     'safe_open_when_left':('c08','Возможно открытый сейф при уходе кассира'),
     'screen_unlocked_when_left':('c11','Возможно незаблокированный экран при уходе кассира'),
-    'room_door_left_open':('c12','Открытая дверь кассового помещения'),
+    'room_door_left_open':('c12','Возможно открытая дверь кассового помещения'),
 }
 
 
@@ -95,6 +97,9 @@ class NativeQuickEngine(QuickEngine):
             traces.append(trace)
         return checks,{'groups':traces}
 
+    def infer_door_sequence(self, frames, start, end, deadline):
+        return infer_door_observation(self, frames, start, end, deadline)
+
     def infer(self, frames, question, grammar, deadline, *, pixels=6_291_456):
         if time.monotonic() >= deadline-3: raise TimeoutError('Native video deadline before encoding')
         effective_pixels = pixels if self.pixel_cap is None else min(pixels, self.pixel_cap)
@@ -157,6 +162,16 @@ class NativeQuickEngine(QuickEngine):
             preliminary=build_findings(actions,sequence,duration)
             questions=list(preliminary['review_questions'])
             candidates=risk_candidates(outcomes)
+            # A low-resolution general checklist must not veto the dedicated
+            # high-detail door observation. Every covered window gets its own
+            # visual sequence decision; A/B/D still create no event.
+            for w in outcomes:
+                if not any(c['kind']=='room_door_left_open' and w['index'] in c['supporting_windows']
+                           for c in candidates):
+                    candidates.append({'kind':'room_door_left_open','start_sec':w['start_sec'],
+                                       'end_sec':w['end_sec'],'supporting_windows':[w['index']],
+                                       'origin':'independent_detailed_door_review'})
+            candidates.sort(key=lambda c:(c['start_sec'],RISK_KEYS.index(c['kind'])))
             # Whole-video observations may find a transition missed by window
             # boundaries. They are proposals only and still need dense review.
             for kind in RISK_KEYS:
@@ -170,6 +185,27 @@ class NativeQuickEngine(QuickEngine):
                 with _review_candidate(queue_progress,index,candidate,deadline):
                     kind=candidate['kind']; a,b=candidate['start_sec'],candidate['end_sec']
                     selected=select_frames(frames,a,b,fps=2.,max_frames=64)
+                    if kind == 'room_door_left_open':
+                        # Spread the same pixel budget over four source frames
+                        # so the door panel/gap remains visible. Keep the full
+                        # interval; the later dense pass still localizes it.
+                        door_frames=select_frames(frames,a,b,fps=2.,max_frames=4)
+                        door,trace=self.infer_door_sequence(door_frames,a,b,deadline)
+                        if door.get('sequence') not in ('A','B','C','D'):
+                            raise IncompleteAnalysis('Invalid door sequence classification')
+                        diagnostics.append({'stage':'door_sequence','kind':kind,
+                                            'sampling':sampling_metadata(door_frames,2.),
+                                            'input_selection':'four_source_frames_full_interval',**trace})
+                        if door['sequence'] != 'C':
+                            status='unclear' if door['sequence']=='D' else 'not_observed'
+                            refinements.append({**candidate,'status':status,
+                                                'method':'visual_door_sequence','door_sequence':door['sequence']})
+                            if status=='unclear':
+                                questions.append({'type':RISK_TITLES[kind][1],
+                                                  'timecode_sec':selected[len(selected)//2]['time_sec'],
+                                                  'message':'Модель не смогла различить положение двери помещения в последовательности кадров.',
+                                                  'status':'requires_review','reason':'door_sequence_unclear'})
+                            continue
                     full_state_window=kind == 'room_door_left_open' and b-a <= 20.
                     if full_state_window:
                         # The dense pass uses the whole candidate anyway, so a
@@ -206,12 +242,12 @@ class NativeQuickEngine(QuickEngine):
                         # for an overview-only proposal, without using labels.
                         span=min(20.,b-a)
                         lower=max(a,min(center-span/2,b-span)); upper=lower+span
-                        fine_limit=84
+                        fine_limit=4
                     fine=select_frames(frames,lower,upper,fps=4.,max_frames=fine_limit)
                     grammar=ChoiceGrammar(self.processor.tokenizer,localization_choices(fine))
                     time_map=[{'displayed_sec':round((pair['start_sec']+pair['end_sec'])/2,1),**pair}
                               for pair in source_bins(fine)]
-                    question=(f'Re-examine this denser video interval {fine[0]["time_sec"]:.6f} to {fine[-1]["time_sec"]:.6f} seconds. '
+                    question=(f'Re-examine these source video frames from {fine[0]["time_sec"]:.6f} to {fine[-1]["time_sec"]:.6f} seconds. '
                               + ROLE_GUIDANCE +
                               'Independently verify whether the following specific visible event occurs: '+FIELDS[kind]+'. '
                               'Do not trust the earlier proposal. Cash moving on the desk is not necessarily combining bundles; '
@@ -247,16 +283,19 @@ class NativeQuickEngine(QuickEngine):
                     if any(e['category_id']==cid and e['start_sec']==times[0] and e['end_sec']==times[-1] for e in events):
                         continue
                     rule=PUBLIC_CASH_RULE.copy() if kind in RISK_KEYS[:3] else None
-                    description=(f'Локальная модель отметила признак при обзорном просмотре и повторном анализе с 4 кадрами/с. '
+                    description=((('Локальная модель отметила состояние двери при подробном просмотре четырёх исходных кадров и повторном определении интервала. '
+                                   if kind=='room_door_left_open' else
+                                   'Локальная модель отметила признак при обзорном просмотре и повторном анализе с 4 кадрами/с. '))+
                                  f'Интервал по выбранным кадрам: {times[0]:.2f}–{times[-1]:.2f} с. '
                                  'Это автоматическая локализация, её границы и правильность требуют проверки человеком. ')
                     description+= ('Принадлежность денег разным клиентам не установлена; пункт 20 применим только при подтверждении соответствующих обстоятельств операции.'
                                   if rule else 'Применимое внутреннее правило банка не подтверждено; нормативное основание требует проверки.')
                     if kind == 'room_door_left_open':
-                        description += ' Зафиксировано открытое состояние двери помещения. Вход человека и его права доступа этим событием не устанавливаются.'
+                        description += 'Найден подозрительный эпизод: возможно, дверь помещения оставалась открытой. Вход человека и его права доступа этим событием не устанавливаются.'
                     events.append({'type':title,'category_id':cid,'timecode_sec':times[0],
                                    'start_sec':times[0],'end_sec':times[-1],'description':description,
-                                   'localization':'dense_sample_support','status':'possible_sign_requires_review',
+                                   'localization':'detailed_state_sample_support' if kind=='room_door_left_open' else 'dense_sample_support',
+                                   'status':'possible_sign_requires_review',
                                    'rule':rule,'evidence_frames':evidence(frames,times)})
                     print(json.dumps({'stage':'refine','candidates_reviewed':index+1,'candidates_total':len(candidates),
                                       'elapsed_sec':round(time.monotonic()-began,2)}),file=sys.stderr,flush=True)
@@ -272,6 +311,7 @@ class NativeQuickEngine(QuickEngine):
                                 'input_mode':'native_video_with_source_pts','requested_sample_fps':2.,'window_seconds':20.,'stride_seconds':16.,
                                 'source_sampling':source_sampling,'overview_sampling':overview_sampling,
                                 'requested_refinement_sample_fps':4.,'temporal_patch_frames':2,
+                                'room_door_refinement':'four_detailed_source_frames_full_window',
                                 'localization':'approximate_window','boundary_method':'independent_dense_video_review',
                                 'windows_done':len(outcomes),'windows_total':len(plan),'coverage_gaps':[],
                                 'uncertain_windows':sum(w['uncertain'] for w in outcomes),'windows':outcomes,
@@ -281,7 +321,7 @@ class NativeQuickEngine(QuickEngine):
                                 'review_questions':questions[:40],
                                 'limitations':preliminary['limitations']+[
                                     'Видеомодель использует обзор всей операции, перекрывающиеся фрагменты и историю непроверенных наблюдений.',
-                                    'Кандидаты проходят повторный просмотр с 4 кадрами/с; поиск опорного момента применяется, когда нужно выбрать короткий фрагмент. Это не независимая проверка человеком.',
+                                    'Кандидаты проходят повторный просмотр исходных кадров; для двери используются четыре детальных кадра всего фрагмента, для других событий — выборка с 4 кадрами/с. Это не независимая проверка человеком.',
                                     'Начало и конец привязаны к исходным кадрам, но точность границ не гарантирована; два кадра объединяются видеопроцессором.',
                                     'Отсутствие действия в выборке не доказывает его отсутствие в операции. Записи в банковской базе по видео не проверяются.'],
                                 'peak_vram_gib':round(self.torch.cuda.max_memory_allocated()/2**30,3)},

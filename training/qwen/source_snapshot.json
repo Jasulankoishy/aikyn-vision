@@ -1,22 +1,33 @@
 {
-  "scope": "native_2b_source_only",
-  "baseline_note": "v10 behavior restored by excluding failed v11 door sequence gate; no finetuning or accuracy claim",
+  "scope": "native_2b_4b_v14_source_only",
+  "baseline_note": "Native v14 room-door observation; two development recordings do not establish accuracy; no finetuning.",
+  "runtime_selection": {
+    "engine": "native",
+    "model": "4b",
+    "pixel_cap": 3145728
+  },
   "packaged_sha256": {
+    "bootstrap.ps1": "0b182637a7ba041024d6e8445d90596bf55c53f8b6196001a33eb76fd097d7e8",
+    "door_observation.py": "bd32284e5819d84bb862019493629a730792e2ac4d2e702e85db7f2d113ab866",
     "download_model.py": "e11a93fed7a2097dbab8298d68721daf84b405975de271b6f12e709c60ea676e",
+    "download_model_4b.py": "7d25b8b6fa9a5fc53825d5c98cc6ad8340a3d14bc30bfa5da5db594204f79a60",
     "local_model.py": "80f932400bf2c01bc9bda3f08b9c221adb1e17a52310e7e0f3a1c5c0ca5590cc",
     "model_inputs.py": "36e0b958da702adc54a91f6fab9d4150fd17b5c19fb4b328427f05a7a75c8abe",
     "model_snapshot.py": "18b3172e729e1bf8fd3e4069115ace63360f1a4d7151d2961edf8f6f59c35aa2",
     "native_core.py": "b57fc15c91cff1a7ebfb33ecd7159f742a42bf0c2a84296d2e2696624b3c11d7",
-    "native_engine.py": "ae49dc8fed3e2acc571923704625ee8029ba0dd9dc5ba05437f4a1e26e27c35b",
+    "native_engine.py": "eedc2e9f73566498072c44b3d7dbf2f57e6c68758fa7fb04497bbe8d6e2b28d3",
     "native_sampling.py": "575de1b2dfa646e1c91d0595b85756d8b4ffbe654ffe27ae942752d83032918b",
     "native_video.py": "add77ab472336e11dcc6d404a47d6bc88a78db9f829d6cd44f28b035dfd2179e",
     "quick_core.py": "fe9129b3bbb185201f428f2a349134abb18ca43d92caea3a89b160944f117757",
-    "quick_inference.py": "8b0a6d62a40923bb1ce7af243e4d432824665aa15023d0624755a71b35ad0ad4",
+    "quick_inference.py": "c3ed19c5d9cbeb0b51097bc3c31899d96a24424c88ec3d81968bfa855f80cf06",
+    "result_quality.py": "9f40e77d98c0d28261f9fc3e25deb007df7ca1ad22fe4204b68bebd233af98c3",
     "review_findings.py": "90d37fbdb1d900baa2c468178bebcf693a368f664c94828fcb8e075808a13609",
-    "runtime_selection.py": "6674d820c9569b19dbe940b5916ecded6fe6753dcf35f28ee15cb0ea4c915741",
+    "runtime_selection.json": "ebfa23a36139300f4c569ba9c5ca4a9182de32a5873fda77d3d7c15e7b8335ad",
+    "runtime_selection.py": "46afe4d395fe79e4b091ddf5fb1b88db2ca5b16cd607c7cd53bf0608f10e4fb8",
     "sequence_core.py": "80c8598e5ac858a02c3e26703737a00f6768aa8fc6a5ebdf2dee4194235207a7",
     "temporal_context.py": "1789e1fd912f74d3d8e8608b8a87137ed1a1bf07b3c73e0d82ede908c1fed4a0",
     "temporal_core.py": "fff8f85e8e50592040e32ba8b9ed8b129866737e6b5117144e3a857239b37eb7",
     "temporal_scan.py": "a53d750d4d8a5b98ed47d683a0fceaa0496c95783cc952dc1f31ddd74cab5c61"
-  }
+  },
+  "hash_normalization": "UTF-8 with LF line endings"
 }
